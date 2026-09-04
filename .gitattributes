@@ -1,0 +1,5 @@
+# Preserve bytes exactly. The submitted ZIP is built from a checkout of this
+# repository, and the QGIS listing is expected to match the packaged source, so
+# a line-ending conversion on someone else's clone would silently make the two
+# differ while both looked correct.
+* -text

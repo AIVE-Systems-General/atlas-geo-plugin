@@ -1,0 +1,12 @@
+# Python dependencies for the ATLAS Geo-Dock QGIS plugin.
+#
+# numpy and GDAL (osgeo) ship with QGIS, but rasterio and requests may not be
+# present in a stock QGIS install. Install these into QGIS's bundled Python
+# (see INSTALL.md). From the QGIS Python Console:
+#
+#   import subprocess, sys
+#   subprocess.check_call([sys.executable, "-m", "pip", "install", "rasterio", "requests"])
+#
+# (Versions are intentionally unpinned so rasterio binds to QGIS's GDAL.)
+rasterio
+requests

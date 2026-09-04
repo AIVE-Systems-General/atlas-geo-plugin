@@ -1,0 +1,2575 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>AtlasGeoHandlerDemoDialogBase</class>
+ <widget class="QDialog" name="AtlasGeoHandlerDemoDialogBase">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>740</width><height>600</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>ATLAS-GEO</string>
+  </property>
+  <property name="font">
+   <font>
+    <family>Segoe UI</family>
+    <pointsize>11</pointsize>
+    <weight>50</weight>
+   </font>
+  </property>
+  <property name="styleSheet">
+   <string>
+/* ═══════════════════════════════════════════════
+   ATLAS GEO — AIVE AI Systems  |  2026 Modern UI
+   Font:    "Segoe UI", "-apple-system", "system-ui" › 500/600
+   Mono:    "SF Mono", "Monaco", "Menlo" › system monospace
+   Design:  Clean, spacious, modern typography hierarchy
+════════════════════════════════════════════════ */
+
+/* ── Base Dialog ───────────────────────────────── */
+QDialog {
+    background-color: #f5f0e8;
+    color: #1a1612;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+}
+QStackedWidget { background-color: #f5f0e8; }
+
+/* ── Header Bar ────────────────────────────────── */
+QFrame#label_header_bar { background-color: #1a1612; }
+
+/* ── Page Titles (Primary Headings) ────────────── */
+QLabel#label_getstarted_title,
+QLabel#label_signin_title,
+QLabel#label_signup_title,
+QLabel#label_reset_title,
+QLabel#label_screen1_title,
+QLabel#label_screen2_title,
+QLabel#label_screen3_title {
+    font-size: 26px;
+    font-weight: 600;
+    color: #1a1612;
+    letter-spacing: -0.2px;
+    line-height: 1.3;
+}
+QLabel#label_screen3_title { color: #059669; }
+
+/* ── Subtitles (Secondary Headings) ────────────── */
+QLabel#label_getstarted_subtitle,
+QLabel#label_signin_subtitle,
+QLabel#label_signup_subtitle,
+QLabel#label_reset_subtitle,
+QLabel#label_screen1_subtitle,
+QLabel#label_screen2_subtitle {
+    font-size: 14px;
+    color: #78716c;
+    font-weight: 400;
+    line-height: 1.5;
+}
+
+/* ── Step Badge Pills ──────────────────────────── */
+QLabel#label_step_indicator,
+QLabel#label_step_indicator_2 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: #ea580c;
+    background-color: #fff4ed;
+    padding: 4px 12px;
+    border-radius: 14px;
+    border: 1px solid #fed7aa;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+}
+QLabel#label_step_indicator_3 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: #059669;
+    background-color: #ecfdf5;
+    padding: 4px 12px;
+    border-radius: 14px;
+    border: 1px solid #a7f3d0;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+}
+
+/* ── GroupBoxes (Cards) ────────────────────────── */
+QGroupBox {
+    border: 1px solid #e7ded2;
+    border-radius: 14px;
+    margin-top: 18px;
+    padding-top: 20px;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-bottom: 16px;
+    color: #a8a096;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    background-color: #ffffff;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 18px;
+    padding: 2px 10px;
+    color: #a8a096;
+    background-color: #ffffff;
+}
+
+/* ── Text Inputs ───────────────────────────────── */
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background-color: #faf7f2;
+    border: 1px solid #e4dccf;
+    border-radius: 10px;
+    padding: 11px 14px;
+    color: #1a1612;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+    selection-background-color: #ea580c;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 2px solid #ea580c;
+    background-color: #ffffff;
+    padding: 10px 13px;
+}
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+    border: 1px solid #ccbda8;
+    background-color: #ffffff;
+}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background-color: #f1ece4;
+    color: #b8b0a6;
+}
+QLineEdit::placeholder { color: #bbb2a7; font-weight: 400; }
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    width: 18px; border: none; background: transparent;
+}
+
+/* ── ComboBox ──────────────────────────────────── */
+QComboBox {
+    background-color: #faf7f2;
+    border: 1px solid #e4dccf;
+    border-radius: 10px;
+    padding: 11px 14px;
+    color: #1a1612;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QComboBox:hover { border: 1px solid #ccbda8; background-color: #ffffff; }
+QComboBox:focus, QComboBox:on { border: 2px solid #ea580c; background-color: #ffffff; }
+QComboBox::drop-down {
+    border: none; width: 34px;
+    subcontrol-origin: padding; subcontrol-position: center right;
+}
+QComboBox::down-arrow { width: 11px; height: 11px; }
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #e4dccf;
+    border-radius: 10px;
+    color: #1a1612;
+    font-size: 14px;
+    font-weight: 500;
+    selection-background-color: #fff4ed;
+    selection-color: #ea580c;
+    padding: 6px;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 30px;
+    padding: 4px 10px;
+    border-radius: 7px;
+}
+
+/* ── Checkbox ──────────────────────────────────── */
+QCheckBox {
+    color: #44403c;
+    font-size: 14px;
+    font-weight: 500;
+    spacing: 10px;
+}
+QCheckBox::indicator {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #d6cfca;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+QCheckBox::indicator:checked {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f4691c, stop:1 #ea580c);
+    border-color: #ea580c;
+}
+QCheckBox::indicator:checked:hover { border-color: #c2410c; }
+QCheckBox::indicator:hover { border-color: #ea580c; background-color: #fff7f1; }
+
+/* ══ PRIMARY BUTTONS ══ */
+QPushButton#btn_next_setup,
+QPushButton#btn_get_started,
+QPushButton#btn_signin,
+QPushButton#btn_do_signup,
+QPushButton#btn_do_reset {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f4691c, stop:1 #ea580c);
+    color: #ffffff;
+    border: none;
+    border-bottom: 2px solid #c2410c;
+    border-radius: 10px;
+    padding: 12px 28px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+    letter-spacing: 0.2px;
+}
+QPushButton#btn_next_setup:hover,
+QPushButton#btn_get_started:hover,
+QPushButton#btn_signin:hover,
+QPushButton#btn_do_signup:hover,
+QPushButton#btn_do_reset:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ea580c, stop:1 #d2480a);
+    border-bottom-color: #9a3412;
+}
+QPushButton#btn_next_setup:pressed,
+QPushButton#btn_get_started:pressed,
+QPushButton#btn_signin:pressed,
+QPushButton#btn_do_signup:pressed,
+QPushButton#btn_do_reset:pressed {
+    background: #c2410c;
+    border-bottom: none;
+    padding-top: 14px;
+}
+QPushButton#btn_next_setup:disabled,
+QPushButton#btn_get_started:disabled,
+QPushButton#btn_signin:disabled,
+QPushButton#btn_do_signup:disabled,
+QPushButton#btn_do_reset:disabled {
+    background: #ece6dd;
+    color: #b5aea6;
+    border-bottom: 2px solid #ddd5ca;
+}
+
+/* ══ SECONDARY BUTTONS ══ */
+QPushButton#btn_cancel_processing,
+QPushButton#btn_signin_back,
+QPushButton#btn_signup_back,
+QPushButton#btn_reset_back,
+QPushButton#btn_new_mission {
+    background-color: #ffffff;
+    color: #57534e;
+    border: 1px solid #e2ddd8;
+    border-radius: 10px;
+    padding: 11px 26px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_cancel_processing:hover,
+QPushButton#btn_signin_back:hover,
+QPushButton#btn_signup_back:hover,
+QPushButton#btn_reset_back:hover,
+QPushButton#btn_new_mission:hover {
+    background-color: #faf7f2;
+    color: #1a1612;
+    border-color: #ccbda8;
+}
+QPushButton#btn_cancel_processing:pressed,
+QPushButton#btn_signin_back:pressed,
+QPushButton#btn_signup_back:pressed,
+QPushButton#btn_reset_back:pressed,
+QPushButton#btn_new_mission:pressed {
+    background-color: #f3ece3;
+}
+
+/* ══ SUCCESS / VIEW MAP ══ */
+QPushButton#btn_view_map {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #14c98e, stop:1 #10b981);
+    color: #ffffff;
+    border: none;
+    border-bottom: 2px solid #059669;
+    border-radius: 10px;
+    padding: 12px 28px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_view_map:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #10b981, stop:1 #059669);
+    border-bottom-color: #047857;
+}
+QPushButton#btn_view_map:pressed {
+    background: #047857;
+    border-bottom: none;
+    padding-top: 14px;
+}
+
+/* ══ EXPORT BUTTON ══ */
+QPushButton#btn_export_report {
+    background-color: transparent;
+    color: #ea580c;
+    border: 1px solid #fed7aa;
+    border-radius: 9px;
+    padding: 11px 26px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_export_report:hover { background-color: #fff4ed; border-color: #f97316; }
+
+/* ══ FEEDBACK BUTTON ══ */
+QPushButton#btn_feedback,
+QPushButton#btn_feedback_results {
+    background-color: transparent;
+    color: #7c3aed;
+    border: 1px solid #ddd6fe;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_feedback:hover,
+QPushButton#btn_feedback_results:hover { background-color: #f5f3ff; border-color: #7c3aed; }
+
+/* ══ BROWSE BUTTON ══ */
+QPushButton#btn_browse_setup {
+    background-color: #ffffff;
+    color: #57534e;
+    border: 1px solid #e8e2d8;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_browse_setup:hover { background-color: #fff4ed; color: #ea580c; border-color: #f97316; }
+
+/* ══ SIGN UP / FORGOT BUTTONS ══ */
+QPushButton#btn_signup {
+    background-color: #fff4ed;
+    color: #ea580c;
+    border: 1px solid #fed7aa;
+    border-radius: 7px;
+    padding: 7px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_signup:hover { background-color: #ffedd5; border-color: #f97316; }
+
+QPushButton#btn_forgot_password {
+    background-color: transparent;
+    color: #ea580c;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: underline;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_forgot_password:hover { color: #c2410c; }
+
+QPushButton#btn_send_reset_code {
+    background-color: #ffffff;
+    color: #57534e;
+    border: 1px solid #e8e2d8;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+}
+QPushButton#btn_send_reset_code:hover { background-color: #fff4ed; border-color: #f97316; color: #ea580c; }
+
+/* ══ PROGRESS BAR ══ */
+QProgressBar {
+    border: none;
+    border-radius: 6px;
+    background-color: #ece6dd;
+    min-height: 12px;
+    max-height: 12px;
+}
+QProgressBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #fb923c, stop:0.55 #ea580c, stop:1 #c2410c);
+    border-radius: 6px;
+}
+
+/* ══ DROP ZONE ══ (dashed box is now the FRAME so the Browse button sits inside) */
+QFrame#frame_drop_zone {
+    border: 2px dashed #d6cfca;
+    border-radius: 10px;
+    background-color: #faf8f4;
+}
+QFrame#frame_drop_zone:hover { border-color: #ea580c; background-color: #fff4ed; }
+QLabel#label_drop_zone {
+    color: #a8a29e;
+    font-size: 15px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+}
+
+/* ══ PIPELINE STATUS ITEMS ══ */
+QLabel#label_status_upload,
+QLabel#label_status_analyze,
+QLabel#label_status_match,
+QLabel#label_status_prepare {
+    color: #57534e;
+    padding: 9px 16px;
+    background-color: #faf8f4;
+    border-left: 3px solid #e8e2d8;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+    line-height: 1.4;
+}
+
+/* ══ INSIGHT METRIC TILES ══ */
+QLabel#label_insight_quality {
+    color: #059669;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 9px 16px;
+    background-color: #ecfdf5;
+    border-radius: 7px;
+    border-left: 3px solid #10b981;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+    line-height: 1.4;
+}
+QLabel#label_insight_speed {
+    color: #ea580c;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 9px 16px;
+    background-color: #fff4ed;
+    border-radius: 7px;
+    border-left: 3px solid #ea580c;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+    line-height: 1.4;
+}
+QLabel#label_insight_eta {
+    color: #92400e;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 9px 16px;
+    background-color: #fffbeb;
+    border-radius: 7px;
+    border-left: 3px solid #f59e0b;
+    font-family: "Monaco", "Menlo", "Consolas", monospace;
+    line-height: 1.4;
+}
+
+/* ══ SUCCESS CHECKMARK ══ */
+QLabel#label_checkmark { color: #10b981; font-size: 80px; }
+
+/* ══ DIVIDER LINES ══ */
+QFrame[frameShape="4"] { background-color: #e8e2d8; max-height: 1px; border: none; }
+
+/* ══ PROGRESS % LABEL ══ */
+QLabel#label_progress_percent {
+    font-size: 14px;
+    font-weight: 700;
+    color: #ea580c;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+    background-color: #fff4ed;
+    padding: 4px 12px;
+    border-radius: 7px;
+    border: 1px solid #fed7aa;
+    min-width: 48px;
+}
+
+/* ══ GENERIC LABELS ══ */
+QLabel {
+    color: #57534e;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Segoe UI", "-apple-system", "system-ui", sans-serif;
+    background-color: transparent;
+    line-height: 1.5;
+}
+
+/* ══ SCROLLBARS (thin, modern, overlay-style) ══ */
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 2px 2px 2px 0;
+}
+QScrollBar::handle:vertical {
+    background: #d8cfc4;
+    min-height: 36px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover { background: #c2410c; }
+QScrollBar::handle:vertical:pressed { background: #9a3412; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; border: none; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 0 2px 2px 2px;
+}
+QScrollBar::handle:horizontal {
+    background: #d8cfc4;
+    min-width: 36px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal:hover { background: #c2410c; }
+QScrollBar::handle:horizontal:pressed { background: #9a3412; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; border: none; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
+
+/* ══ SCROLL AREAS ══ */
+QScrollArea, QAbstractScrollArea { border: none; background: transparent; }
+
+/* ══ TOOLTIPS (dark, rounded) ══ */
+QToolTip {
+    background-color: #1a1612;
+    color: #f5f0e8;
+    border: 1px solid #2c2620;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* ══ CONTEXT MENUS ══ */
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #e4dccf;
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 7px 18px;
+    border-radius: 7px;
+    color: #44403c;
+    font-size: 13px;
+}
+QMenu::item:selected { background-color: #fff4ed; color: #ea580c; }
+QMenu::separator { height: 1px; background: #ece6dd; margin: 4px 8px; }
+   </string>
+  </property>
+
+  <layout class="QVBoxLayout" name="verticalLayout_main">
+   <property name="spacing"><number>0</number></property>
+   <property name="leftMargin"><number>0</number></property>
+   <property name="topMargin"><number>0</number></property>
+   <property name="rightMargin"><number>0</number></property>
+   <property name="bottomMargin"><number>0</number></property>
+
+   <!-- ═══ TOP BRAND BAR ═══ -->
+   <item>
+    <widget class="QFrame" name="label_header_bar">
+     <property name="minimumHeight"><number>34</number></property>
+     <property name="maximumHeight"><number>34</number></property>
+     <property name="styleSheet"><string>QFrame#label_header_bar { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a1612, stop:1 #2b221a); border: none; border-bottom: 2px solid #ea580c; }</string></property>
+     <layout class="QHBoxLayout">
+      <property name="spacing"><number>8</number></property>
+      <property name="leftMargin"><number>12</number></property>
+      <property name="topMargin"><number>2</number></property>
+      <property name="rightMargin"><number>12</number></property>
+      <property name="bottomMargin"><number>2</number></property>
+      <item>
+       <widget class="QLabel" name="label_aive_logo">
+        <property name="text"><string></string></property>
+        <property name="alignment"><set>Qt::AlignCenter</set></property>
+        <property name="styleSheet"><string>background: transparent; border: none;</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_header_wordmark">
+        <property name="text"><string>&lt;b&gt;ATLAS·GEO&lt;/b&gt;&lt;span style="color:#6b5d52;"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;│&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;/span&gt;&lt;span style="color:#c9b8a3; font-weight:600; font-size:10px;"&gt;AIVE&amp;nbsp;AI&amp;nbsp;SYSTEMS&lt;/span&gt;</string></property>
+        <property name="styleSheet"><string>background: transparent; border: none; color: #ffffff; font-size: 12px; font-family: "Segoe UI", sans-serif;</string></property>
+       </widget>
+      </item>
+      <item>
+       <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_header_status">
+        <property name="text"><string>v1.0</string></property>
+        <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+        <property name="styleSheet"><string>background: transparent; border: none; color: #9a8f80; font-size: 10px; font-weight: 600; padding: 2px 4px;</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QStackedWidget" name="stacked_pages">
+     <property name="currentIndex"><number>0</number></property>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 0 — GET STARTED
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_getstarted">
+      <layout class="QVBoxLayout" name="verticalLayout_getstarted">
+       <property name="leftMargin"><number>32</number></property>
+       <property name="topMargin"><number>44</number></property>
+       <property name="rightMargin"><number>32</number></property>
+       <property name="bottomMargin"><number>32</number></property>
+       <property name="spacing"><number>14</number></property>
+
+       <item>
+        <widget class="QLabel" name="label_getstarted_title">
+         <property name="text"><string>ATLAS-GEO</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="styleSheet">
+          <string>font-size: 38px; font-weight: 800; color: #1a1612; letter-spacing: 1px;</string>
+         </property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_gs_brand">
+         <property name="text"><string>UAV  GEOREFERENCING  ·  BY  AIVE  AI  SYSTEMS</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="styleSheet">
+          <string>font-size: 11px; font-weight: 700; letter-spacing: 3px; color: #ea580c; font-family: "Monaco", "Menlo", "Consolas", monospace;</string>
+         </property>
+        </widget>
+       </item>
+
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>16</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_getstarted_description">
+         <property name="text"><string>Accurately georeference UAV-captured imagery in seconds using advanced machine learning algorithms.
+
+This plugin enables seamless integration of your UAV survey data with QGIS, providing accurate positioning and real-time layer visualization on satellite base maps.</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet">
+          <string>color: #78716c; font-size: 12px; line-height: 1.7; margin: 0px 32px;</string>
+         </property>
+        </widget>
+       </item>
+
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>24</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- Feature tiles row -->
+       <item>
+        <layout class="QHBoxLayout">
+         <property name="spacing"><number>20</number></property>
+
+         <item>
+          <widget class="QFrame" name="tile_feat1">
+           <property name="styleSheet">
+            <string>QFrame { background-color: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; padding: 12px; }</string>
+           </property>
+           <layout class="QVBoxLayout">
+            <property name="spacing"><number>6</number></property>
+            <property name="leftMargin"><number>14</number></property>
+            <property name="topMargin"><number>14</number></property>
+            <property name="rightMargin"><number>14</number></property>
+            <property name="bottomMargin"><number>14</number></property>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>⚡</string></property>
+              <property name="styleSheet"><string>font-size: 18px;</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>AI Georeferencing</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: 700; color: #1a1612;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>Dense neural image matching</string></property>
+              <property name="styleSheet"><string>font-size: 10px; color: #a8a29e;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+
+         <item>
+          <widget class="QFrame" name="tile_feat2">
+           <property name="styleSheet">
+            <string>QFrame { background-color: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; padding: 12px; }</string>
+           </property>
+           <layout class="QVBoxLayout">
+            <property name="spacing"><number>6</number></property>
+            <property name="leftMargin"><number>14</number></property>
+            <property name="topMargin"><number>14</number></property>
+            <property name="rightMargin"><number>14</number></property>
+            <property name="bottomMargin"><number>14</number></property>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>🗺️</string></property>
+              <property name="styleSheet"><string>font-size: 18px;</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>QGIS Integration</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: 700; color: #1a1612;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>Direct canvas layer load</string></property>
+              <property name="styleSheet"><string>font-size: 10px; color: #a8a29e;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+
+         <item>
+          <widget class="QFrame" name="tile_feat3">
+           <property name="styleSheet">
+            <string>QFrame { background-color: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; padding: 12px; }</string>
+           </property>
+           <layout class="QVBoxLayout">
+            <property name="spacing"><number>6</number></property>
+            <property name="leftMargin"><number>14</number></property>
+            <property name="topMargin"><number>14</number></property>
+            <property name="rightMargin"><number>14</number></property>
+            <property name="bottomMargin"><number>14</number></property>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>☁️</string></property>
+              <property name="styleSheet"><string>font-size: 18px;</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>Cloud Sync</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: 700; color: #1a1612;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>Stored in your account</string></property>
+              <property name="styleSheet"><string>font-size: 10px; color: #a8a29e;</string></property>
+              <property name="wordWrap"><bool>true</bool></property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+
+        </layout>
+       </item>
+
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>32</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_get_started">
+         <property name="text"><string>Get Started  →</string></property>
+         <property name="minimumHeight"><number>46</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 1 — SIGN IN
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_signin">
+      <layout class="QVBoxLayout" name="verticalLayout_signin">
+       <property name="leftMargin"><number>24</number></property>
+       <property name="topMargin"><number>14</number></property>
+       <property name="rightMargin"><number>24</number></property>
+       <property name="bottomMargin"><number>14</number></property>
+       <property name="spacing"><number>0</number></property>
+
+       <!-- ── Hero / branding card ── -->
+       <item>
+        <widget class="QFrame" name="frame_signin_hero">
+         <property name="maximumHeight"><number>105</number></property>
+         <property name="styleSheet">
+          <string>
+QFrame#frame_signin_hero {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fff7ed, stop:1 #fef3c7);
+    border-radius: 12px;
+    border: 1px solid #fed7aa;
+}
+          </string>
+         </property>
+         <layout class="QVBoxLayout">
+          <property name="spacing"><number>2</number></property>
+          <property name="leftMargin"><number>12</number></property>
+          <property name="topMargin"><number>10</number></property>
+          <property name="rightMargin"><number>12</number></property>
+          <property name="bottomMargin"><number>10</number></property>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>🛰</string></property>
+            <property name="alignment"><set>Qt::AlignCenter</set></property>
+            <property name="styleSheet"><string>font-size: 26px; background: transparent; border: none;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>ATLAS-GEO</string></property>
+            <property name="alignment"><set>Qt::AlignCenter</set></property>
+            <property name="styleSheet"><string>font-size: 15px; font-weight: 800; color: #ea580c; letter-spacing: 5px; background: transparent; border: none; font-family: "Consolas", monospace;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>UAV Georeferencing Platform</string></property>
+            <property name="alignment"><set>Qt::AlignCenter</set></property>
+            <property name="styleSheet"><string>font-size: 9px; color: #92400e; letter-spacing: 1px; background: transparent; border: none;</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- 12px gap after hero -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>12</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Title block ── -->
+       <item>
+        <widget class="QFrame" name="frame_signin_title_block">
+         <property name="styleSheet"><string>QFrame { background: transparent; border: none; }</string></property>
+         <layout class="QVBoxLayout">
+          <property name="spacing"><number>2</number></property>
+          <property name="leftMargin"><number>0</number></property>
+          <property name="topMargin"><number>0</number></property>
+          <property name="rightMargin"><number>0</number></property>
+          <property name="bottomMargin"><number>0</number></property>
+          <item>
+           <widget class="QLabel" name="label_signin_title">
+            <property name="text"><string>Welcome back</string></property>
+            <property name="styleSheet"><string>font-size: 20px; font-weight: 700; color: #1a1612;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_signin_subtitle">
+            <property name="text"><string>Sign in to access your ATLAS account</string></property>
+            <property name="styleSheet"><string>font-size: 11px; color: #78716c;</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- 10px gap before form card -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Form card ── -->
+       <item>
+        <widget class="QFrame" name="frame_signin_form">
+         <property name="styleSheet">
+          <string>
+QFrame#frame_signin_form {
+    background-color: #ffffff;
+    border: 1px solid #ece4d8;
+    border-bottom: 2px solid #e3d6c4;
+    border-radius: 14px;
+}
+QLabel { background: transparent; border: none; }
+          </string>
+         </property>
+         <layout class="QVBoxLayout">
+          <property name="spacing"><number>0</number></property>
+          <property name="leftMargin"><number>16</number></property>
+          <property name="topMargin"><number>14</number></property>
+          <property name="rightMargin"><number>16</number></property>
+          <property name="bottomMargin"><number>14</number></property>
+
+          <!-- Email label -->
+          <item>
+           <widget class="QLabel" name="label_email">
+            <property name="text"><string>Email Address</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #44403c;</string></property>
+           </widget>
+          </item>
+          <!-- 4px gap -->
+          <item>
+           <spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>4</height></size></property></spacer>
+          </item>
+          <!-- Email input -->
+          <item>
+           <widget class="QLineEdit" name="input_email">
+            <property name="placeholderText"><string>your.email@example.com</string></property>
+            <property name="minimumHeight"><number>36</number></property>
+           </widget>
+          </item>
+
+          <!-- 10px gap between fields -->
+          <item>
+           <spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property></spacer>
+          </item>
+
+          <!-- Password label row: label left, forgot link right -->
+          <item>
+           <layout class="QHBoxLayout">
+            <property name="spacing"><number>0</number></property>
+            <item>
+             <widget class="QLabel" name="label_password">
+              <property name="text"><string>Password</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #44403c;</string></property>
+             </widget>
+            </item>
+            <item>
+             <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btn_forgot_password">
+              <property name="text"><string>Forgot password?</string></property>
+              <property name="styleSheet"><string>font-size: 10px; color: #ea580c; background: transparent; border: none; padding: 0; text-decoration: underline;</string></property>
+              <property name="flat"><bool>true</bool></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <!-- 4px gap -->
+          <item>
+           <spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>4</height></size></property></spacer>
+          </item>
+          <!-- Password input -->
+          <item>
+           <widget class="QLineEdit" name="input_password">
+            <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+            <property name="placeholderText"><string>Enter your password</string></property>
+            <property name="minimumHeight"><number>36</number></property>
+           </widget>
+          </item>
+
+          <!-- 8px gap -->
+          <item>
+           <spacer><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>8</height></size></property></spacer>
+          </item>
+
+          <!-- Remember me -->
+          <item>
+           <widget class="QCheckBox" name="checkbox_remember">
+            <property name="text"><string>Remember me on this device</string></property>
+            <property name="styleSheet"><string>font-size: 11px; color: #78716c; background: transparent; border: none;</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- 10px gap before sign-in button -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Sign In button ── -->
+       <item>
+        <widget class="QPushButton" name="btn_signin">
+         <property name="text"><string>Sign In  →</string></property>
+         <property name="minimumHeight"><number>44</number></property>
+        </widget>
+       </item>
+
+       <!-- 10px gap before divider -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Divider ── or ── -->
+       <item>
+        <layout class="QHBoxLayout">
+         <property name="spacing"><number>8</number></property>
+         <item>
+          <widget class="QFrame" name="frame_divider_l">
+           <property name="frameShape"><enum>QFrame::HLine</enum></property>
+           <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Fixed"><horstretch>1</horstretch><verstretch>0</verstretch></sizepolicy>
+           </property>
+           <property name="styleSheet"><string>background-color: #e8e2d8; max-height: 1px;</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel">
+           <property name="text"><string>or</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="styleSheet"><string>font-size: 10px; color: #a8a29e; padding: 0 6px;</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QFrame" name="frame_divider_r">
+           <property name="frameShape"><enum>QFrame::HLine</enum></property>
+           <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Fixed"><horstretch>1</horstretch><verstretch>0</verstretch></sizepolicy>
+           </property>
+           <property name="styleSheet"><string>background-color: #e8e2d8; max-height: 1px;</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <!-- 8px gap -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>8</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Create Account row ── -->
+       <item>
+        <layout class="QHBoxLayout" name="vl_account_actions">
+         <property name="spacing"><number>8</number></property>
+         <item>
+          <widget class="QLabel" name="label_signup_prompt">
+           <property name="text"><string>Don't have an account?</string></property>
+           <property name="styleSheet"><string>color: #78716c; font-size: 11px;</string></property>
+          </widget>
+         </item>
+         <item>
+          <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btn_signup">
+           <property name="text"><string>Create Account →</string></property>
+           <property name="minimumHeight"><number>30</number></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Hidden widgets required by Python (forgot prompt kept for compat) -->
+       <item>
+        <widget class="QLabel" name="label_forgot_prompt">
+         <property name="text"><string></string></property>
+         <property name="visible"><bool>false</bool></property>
+        </widget>
+       </item>
+
+       <!-- Flexible spacer -->
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>0</width><height>8</height></size></property>
+        </spacer>
+       </item>
+
+       <!-- ── Error / info labels (managed by Python) ── -->
+       <item>
+        <widget class="QLabel" name="label_signin_error">
+         <property name="text"><string></string></property>
+         <property name="visible"><bool>false</bool></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_signin_info">
+         <property name="text"><string></string></property>
+         <property name="visible"><bool>false</bool></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+
+       <!-- ── Back button ── -->
+       <item>
+        <widget class="QPushButton" name="btn_signin_back">
+         <property name="text"><string>← Back</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 2 — SIGN UP
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_signup">
+      <layout class="QVBoxLayout" name="verticalLayout_signup">
+       <property name="leftMargin"><number>32</number></property>
+       <property name="topMargin"><number>28</number></property>
+       <property name="rightMargin"><number>32</number></property>
+       <property name="bottomMargin"><number>28</number></property>
+       <property name="spacing"><number>14</number></property>
+
+       <item>
+        <widget class="QLabel" name="label_signup_title">
+         <property name="text"><string>Create Account</string></property>
+         <property name="styleSheet"><string>font-size: 24px; font-weight: 700; color: #1a1612; letter-spacing: -0.3px;</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_signup_subtitle">
+         <property name="text"><string>Register for ATLAS access</string></property>
+         <property name="styleSheet"><string>font-size: 12px; color: #78716c;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QGroupBox" name="groupbox_signup">
+         <property name="title"><string>ACCOUNT DETAILS</string></property>
+         <layout class="QVBoxLayout" name="vl_signup_form">
+          <property name="spacing"><number>8</number></property>
+          <item>
+           <widget class="QLabel" name="label_sn_name">
+            <property name="text"><string>Full Name</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_name">
+            <property name="placeholderText"><string>Your full name</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_email">
+            <property name="text"><string>Email Address</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_email">
+            <property name="placeholderText"><string>your.email@example.com</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_jobtitle">
+            <property name="text"><string>Job Title</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_jobtitle">
+            <property name="placeholderText"><string>e.g. Survey Engineer</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_org">
+            <property name="text"><string>Employer or Organisation</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_org">
+            <property name="placeholderText"><string>Company, university or agency</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_country">
+            <property name="text"><string>Country</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="combo_signup_country"/>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_password">
+            <property name="text"><string>Password  (min 8 characters)</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_password">
+            <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+            <property name="placeholderText"><string>Create a strong password</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_sn_confirm">
+            <property name="text"><string>Confirm Password</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_signup_confirm">
+            <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+            <property name="placeholderText"><string>Repeat your password</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_signup_error">
+         <property name="text"><string></string></property>
+         <property name="visible"><bool>false</bool></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>8</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_do_signup">
+         <property name="text"><string>Create Account  →</string></property>
+         <property name="minimumHeight"><number>44</number></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_signup_back">
+         <property name="text"><string>← Back to Sign In</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 3 — RESET PASSWORD
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_reset_password">
+      <layout class="QVBoxLayout" name="verticalLayout_reset">
+       <property name="leftMargin"><number>32</number></property>
+       <property name="topMargin"><number>28</number></property>
+       <property name="rightMargin"><number>32</number></property>
+       <property name="bottomMargin"><number>28</number></property>
+       <property name="spacing"><number>14</number></property>
+
+       <item>
+        <widget class="QLabel" name="label_reset_title">
+         <property name="text"><string>Reset Password</string></property>
+         <property name="styleSheet"><string>font-size: 22px; font-weight: 700; color: #1a1612;</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_reset_subtitle">
+         <property name="text"><string>Recover your account access</string></property>
+         <property name="styleSheet"><string>font-size: 12px; color: #78716c;</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_reset_step">
+         <property name="text"><string>Step 1: Enter your email address</string></property>
+         <property name="styleSheet"><string>font-size: 11px; color: #ea580c; font-weight: bold; font-family: "Consolas", monospace;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QGroupBox" name="groupbox_reset">
+         <property name="title"><string>PASSWORD RECOVERY</string></property>
+         <layout class="QVBoxLayout" name="vl_reset_form">
+          <property name="spacing"><number>8</number></property>
+          <item>
+           <widget class="QLabel" name="label_reset_email">
+            <property name="text"><string>Email Address</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_reset_email">
+            <property name="placeholderText"><string>your.email@example.com</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_send_reset_code">
+            <property name="text"><string>Send Reset Code  →</string></property>
+            <property name="minimumHeight"><number>36</number></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_reset_code">
+            <property name="text"><string>Verification Code</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_reset_code">
+            <property name="placeholderText"><string>Enter code from email</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_reset_new_password">
+            <property name="text"><string>New Password</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_reset_new_password">
+            <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+            <property name="placeholderText"><string>At least 8 characters</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_reset_confirm">
+            <property name="text"><string>Confirm New Password</string></property>
+            <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="input_reset_confirm">
+            <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+            <property name="placeholderText"><string>Repeat your new password</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_reset_hint">
+         <property name="text"><string>📧  Request a reset via email, then enter the code and new password above.</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet">
+          <string>font-size: 10px; color: #a8a29e; font-style: italic; padding: 8px 12px; background-color: #faf8f4; border-radius: 6px; border-left: 3px solid #e8e2d8;</string>
+         </property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_reset_error">
+         <property name="text"><string></string></property>
+         <property name="visible"><bool>false</bool></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget>
+       </item>
+
+       <item>
+        <spacer>
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>8</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_do_reset">
+         <property name="text"><string>Reset Password  →</string></property>
+         <property name="minimumHeight"><number>44</number></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_reset_back">
+         <property name="text"><string>← Back to Sign In</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 4 — MISSION SETUP  (Upload Screen)
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_setup">
+      <layout class="QVBoxLayout" name="verticalLayout_setup">
+       <property name="leftMargin"><number>32</number></property>
+       <property name="topMargin"><number>20</number></property>
+       <property name="rightMargin"><number>32</number></property>
+       <property name="bottomMargin"><number>22</number></property>
+       <property name="spacing"><number>4</number></property>
+
+       <!-- Top row: step pill + logout -->
+       <item>
+        <layout class="QHBoxLayout">
+         <property name="spacing"><number>10</number></property>
+         <item>
+          <widget class="QLabel" name="label_step_indicator">
+           <property name="text"><string>STEP 01 / 03</string></property>
+          </widget>
+         </item>
+         <item>
+          <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btn_feedback">
+           <property name="text"><string>&#128172; Feedback</string></property>
+           <property name="minimumHeight"><number>30</number></property>
+           <property name="maximumWidth"><number>110</number></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btn_logout_setup">
+           <property name="text"><string>Logout</string></property>
+           <property name="minimumHeight"><number>30</number></property>
+           <property name="maximumWidth"><number>80</number></property>
+           <property name="styleSheet">
+            <string>
+QPushButton {
+    background-color: #ffffff;
+    color: #78716c;
+    border: 1.5px solid #d9cfc7;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #fff1f2;
+    color: #e11d48;
+    border-color: #fda4af;
+}
+QPushButton:pressed {
+    background-color: #ffe4e6;
+    border-color: #e11d48;
+}
+            </string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_screen1_title">
+         <property name="text"><string>Upload Drone Imagery</string></property>
+         <property name="styleSheet"><string>font-size: 22px; font-weight: 700; color: #1a1612; margin-top: 6px;</string></property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_screen1_subtitle">
+         <property name="text"><string>Upload aerial photographs for geo-localization and pose estimation.</string></property>
+         <property name="styleSheet"><string>font-size: 12px; color: #78716c; margin-bottom: 6px;</string></property>
+        </widget>
+       </item>
+
+       <!-- Query Image — borderless bold section header -->
+       <item>
+        <widget class="QLabel" name="label_query_header">
+         <property name="text"><string>Query Image</string></property>
+         <property name="styleSheet"><string>font-size: 13px; font-weight: 800; color: #1a1612; margin-top: 8px;</string></property>
+        </widget>
+       </item>
+       <!-- Unified upload zone: dashed frame (whole thing clickable) with the
+            Browse button INSIDE, centered below the prompt -->
+       <item>
+        <widget class="QFrame" name="frame_drop_zone">
+         <property name="cursor"><cursorShape>PointingHandCursor</cursorShape></property>
+         <layout class="QVBoxLayout" name="vl_drop">
+          <property name="spacing"><number>10</number></property>
+          <property name="leftMargin"><number>20</number></property>
+          <property name="topMargin"><number>26</number></property>
+          <property name="rightMargin"><number>20</number></property>
+          <property name="bottomMargin"><number>22</number></property>
+          <item>
+           <widget class="QLabel" name="label_drop_zone">
+            <property name="text"><string>Drop image here</string></property>
+            <property name="alignment"><set>Qt::AlignCenter</set></property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout">
+            <item>
+             <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btn_browse_setup">
+              <property name="text"><string>Browse Files / Folder…</string></property>
+              <property name="minimumHeight"><number>36</number></property>
+             </widget>
+            </item>
+            <item>
+             <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_file_info">
+            <property name="text"><string>No file selected</string></property>
+            <property name="alignment"><set>Qt::AlignCenter</set></property>
+            <property name="styleSheet"><string>color: #a8a29e; font-size: 11px; font-style: italic;</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- Single subtle helper line (replaces the 3 bordered format tiles) -->
+       <item>
+        <widget class="QLabel" name="label_upload_helper">
+         <property name="text"><string>Supports JPG, TIFF, GeoTIFF (with GPS)  ·  Recommended 4000×3000px+, nadir shots</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>font-size: 11px; color: #a8a29e; margin-top: 4px; margin-bottom: 4px;</string></property>
+        </widget>
+       </item>
+
+       <!-- Recent Uploads section -->
+       <item>
+        <widget class="QGroupBox" name="groupbox_recent_uploads">
+         <property name="title"><string>RECENT UPLOADS</string></property>
+         <property name="maximumHeight"><number>170</number></property>
+         <layout class="QVBoxLayout" name="vl_recent_uploads">
+          <property name="spacing"><number>3</number></property>
+          <property name="topMargin"><number>4</number></property>
+          <property name="bottomMargin"><number>4</number></property>
+
+          <!-- Upload 1: Processed -->
+          <item>
+           <widget class="QFrame" name="frame_upload_1">
+            <property name="styleSheet"><string>QFrame { background-color: #faf7f2; border: 1px solid #ece4d8; border-radius: 8px; }</string></property>
+            <property name="minimumHeight"><number>32</number></property>
+            <property name="maximumHeight"><number>32</number></property>
+            <layout class="QHBoxLayout">
+             <property name="spacing"><number>8</number></property>
+             <property name="leftMargin"><number>8</number></property>
+             <property name="topMargin"><number>4</number></property>
+             <property name="rightMargin"><number>8</number></property>
+             <property name="bottomMargin"><number>4</number></property>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>📄</string></property>
+               <property name="styleSheet"><string>font-size: 10px;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>DJI_0118_D.JPG</string></property>
+               <property name="styleSheet"><string>font-size: 10px; font-weight: 500; color: #1a1612;</string></property>
+              </widget>
+             </item>
+             <item>
+              <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>8.4 MB</string></property>
+               <property name="styleSheet"><string>font-size: 9px; color: #a8a29e;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>Processed</string></property>
+               <property name="styleSheet"><string>font-size: 9px; font-weight: bold; color: #ffffff; background-color: #10b981; padding: 2px 6px; border-radius: 3px;</string></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+
+          <!-- Upload 2: Processed -->
+          <item>
+           <widget class="QFrame" name="frame_upload_2">
+            <property name="styleSheet"><string>QFrame { background-color: #faf7f2; border: 1px solid #ece4d8; border-radius: 8px; }</string></property>
+            <property name="minimumHeight"><number>32</number></property>
+            <property name="maximumHeight"><number>32</number></property>
+            <layout class="QHBoxLayout">
+             <property name="spacing"><number>8</number></property>
+             <property name="leftMargin"><number>8</number></property>
+             <property name="topMargin"><number>4</number></property>
+             <property name="rightMargin"><number>8</number></property>
+             <property name="bottomMargin"><number>4</number></property>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>📄</string></property>
+               <property name="styleSheet"><string>font-size: 10px;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>DJI_0119_D.JPG</string></property>
+               <property name="styleSheet"><string>font-size: 10px; font-weight: 500; color: #1a1612;</string></property>
+              </widget>
+             </item>
+             <item>
+              <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>8.1 MB</string></property>
+               <property name="styleSheet"><string>font-size: 9px; color: #a8a29e;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>Processed</string></property>
+               <property name="styleSheet"><string>font-size: 9px; font-weight: bold; color: #ffffff; background-color: #10b981; padding: 2px 6px; border-radius: 3px;</string></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+
+          <!-- Upload 3: Processing -->
+          <item>
+           <widget class="QFrame" name="frame_upload_3">
+            <property name="styleSheet"><string>QFrame { background-color: #faf7f2; border: 1px solid #ece4d8; border-radius: 8px; }</string></property>
+            <property name="minimumHeight"><number>32</number></property>
+            <property name="maximumHeight"><number>32</number></property>
+            <layout class="QHBoxLayout">
+             <property name="spacing"><number>8</number></property>
+             <property name="leftMargin"><number>8</number></property>
+             <property name="topMargin"><number>4</number></property>
+             <property name="rightMargin"><number>8</number></property>
+             <property name="bottomMargin"><number>4</number></property>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>📄</string></property>
+               <property name="styleSheet"><string>font-size: 10px;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>DJI_0120_D.JPG</string></property>
+               <property name="styleSheet"><string>font-size: 10px; font-weight: 500; color: #1a1612;</string></property>
+              </widget>
+             </item>
+             <item>
+              <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>8.7 MB</string></property>
+               <property name="styleSheet"><string>font-size: 9px; color: #a8a29e;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>Processing</string></property>
+               <property name="styleSheet"><string>font-size: 9px; font-weight: bold; color: #ffffff; background-color: #f59e0b; padding: 2px 6px; border-radius: 3px;</string></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- Mission name + basemap row -->
+       <item>
+        <layout class="QHBoxLayout">
+         <property name="spacing"><number>10</number></property>
+         <item>
+          <widget class="QGroupBox" name="groupbox_mission_name">
+           <property name="title"><string>MISSION IDENTIFIER</string></property>
+           <layout class="QVBoxLayout" name="vl_mission">
+            <property name="spacing"><number>8</number></property>
+            <item>
+             <widget class="QLabel" name="label_mission_name">
+              <property name="text"><string>Mission name  (optional)</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: 600; color: #57534e;</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="input_mission_name">
+              <property name="placeholderText"><string>e.g.  SURVEY_ALPHA_20260511</string></property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupbox_base_map">
+           <property name="title"><string>BASE MAP</string></property>
+           <layout class="QVBoxLayout" name="vl_basemap">
+            <property name="spacing"><number>8</number></property>
+            <item>
+             <widget class="QComboBox" name="combo_basemap_setup">
+              <item><property name="text"><string>Satellite</string></property></item>
+              <item><property name="text"><string>OpenStreetMap</string></property></item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="checkbox_auto_load">
+              <property name="text"><string>Auto-load to canvas</string></property>
+              <property name="checked"><bool>true</bool></property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <item>
+        <spacer name="vSpacer_setup">
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>16</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_next_setup">
+         <property name="text"><string>Begin Processing  →</string></property>
+         <property name="minimumHeight"><number>46</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 5 — PROCESSING  (Pipeline Screen)
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_processing">
+      <layout class="QVBoxLayout" name="verticalLayout_processing">
+       <property name="leftMargin"><number>10</number></property>
+       <property name="topMargin"><number>10</number></property>
+       <property name="rightMargin"><number>10</number></property>
+       <property name="bottomMargin"><number>10</number></property>
+       <property name="spacing"><number>6</number></property>
+
+       <!-- Top header: step + processing badge + frame counter -->
+       <item>
+        <layout class="QHBoxLayout">
+         <property name="spacing"><number>10</number></property>
+         <item>
+          <widget class="QLabel" name="label_step_indicator_2">
+           <property name="text"><string>STEP 02 / 03</string></property>
+          </widget>
+         </item>
+         <item>
+          <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_processing_file">
+           <property name="text"><string>DJI_0118_D.JPG</string></property>
+           <property name="styleSheet"><string>font-size: 10px; color: #a8a29e;</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_frame_badge">
+           <property name="text"><string>Processing</string></property>
+           <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 1px; color: #ffffff; background-color: #ea580c; padding: 3px 10px; border-radius: 10px; font-family: "Consolas", monospace;</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_frame_counter">
+           <property name="text"><string>Frame 3/10</string></property>
+           <property name="styleSheet"><string>font-size: 9px; color: #a8a29e; font-family: "Consolas", monospace;</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <!-- Processing Pipeline title -->
+       <item>
+        <widget class="QLabel" name="label_screen2_title">
+         <property name="text"><string>Processing Pipeline</string></property>
+         <property name="styleSheet"><string>font-size: 16px; font-weight: 700; color: #1a1612; margin-top: 2px; margin-bottom: 2px;</string></property>
+        </widget>
+       </item>
+
+       <!-- Progress card -->
+       <item>
+        <widget class="QFrame" name="frame_progress_card">
+         <property name="styleSheet"><string>QFrame#frame_progress_card { background: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; }</string></property>
+         <layout class="QVBoxLayout">
+          <property name="spacing"><number>4</number></property>
+          <property name="leftMargin"><number>12</number></property>
+          <property name="topMargin"><number>8</number></property>
+          <property name="rightMargin"><number>12</number></property>
+          <property name="bottomMargin"><number>8</number></property>
+          <item>
+           <layout class="QHBoxLayout">
+            <property name="spacing"><number>8</number></property>
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>OVERALL PROGRESS</string></property>
+              <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e;</string></property>
+             </widget>
+            </item>
+            <item>
+             <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer>
+            </item>
+            <item>
+             <widget class="QLabel" name="label_progress_percent">
+              <property name="text"><string>0%</string></property>
+              <property name="styleSheet"><string>font-size: 11px; font-weight: bold; color: #ea580c;</string></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QProgressBar" name="progressbar_processing">
+            <property name="value"><number>0</number></property>
+            <property name="minimumHeight"><number>8</number></property>
+            <property name="maximumHeight"><number>8</number></property>
+            <property name="textVisible"><bool>false</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- Pipeline visualization card -->
+       <item>
+        <widget class="QFrame" name="groupbox_pipeline_viz">
+         <property name="maximumHeight"><number>145</number></property>
+         <property name="styleSheet"><string>QFrame#groupbox_pipeline_viz { background: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; }</string></property>
+         <layout class="QVBoxLayout" name="vl_pipeline_viz">
+          <property name="spacing"><number>4</number></property>
+          <property name="leftMargin"><number>10</number></property>
+          <property name="topMargin"><number>8</number></property>
+          <property name="rightMargin"><number>10</number></property>
+          <property name="bottomMargin"><number>6</number></property>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>PROCESSING PIPELINE</string></property>
+            <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame">
+            <property name="frameShape"><enum>QFrame::HLine</enum></property>
+            <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+            <property name="styleSheet"><string>background: #f0ece6; max-height: 1px; border: none;</string></property>
+           </widget>
+          </item>
+
+          <!-- Stage circles row -->
+          <item>
+           <layout class="QHBoxLayout" name="hl_stages">
+            <property name="spacing"><number>0</number></property>
+
+            <!-- Stage 01: Received (complete - green) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage1">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #10b981; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>01</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Received</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #ea580c; font-weight: bold;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 1 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #10b981; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 02: Tiles (complete - green) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage2">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #10b981; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>02</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Tiles</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #ea580c; font-weight: bold;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 2 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #10b981; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 03: Coarse (complete - green) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage3">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #10b981; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>03</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Coarse</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #ea580c; font-weight: bold;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 3 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #10b981; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 04: Features (complete - green) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage4">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #10b981; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>04</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Fine</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #ea580c; font-weight: bold;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 4 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #f59e0b; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 05: Matching (active - orange) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage5">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #f59e0b; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>05</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Match</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #f59e0b; font-weight: bold;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 5 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #d1d5db; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 06: Pose (pending - gray) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage6">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #d1d5db; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>06</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Warp</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #d1d5db;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <!-- Connector line 6 -->
+            <item>
+             <widget class="QLabel">
+              <property name="text"><string>—</string></property>
+              <property name="alignment"><set>Qt::AlignCenter</set></property>
+              <property name="styleSheet"><string>color: #d1d5db; font-size: 12px; min-width: 20px;</string></property>
+             </widget>
+            </item>
+
+            <!-- Stage 07: Corners (pending - gray) -->
+            <item>
+             <layout class="QVBoxLayout" name="vl_stage7">
+              <property name="spacing"><number>2</number></property>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>●</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>color: #d1d5db; font-size: 16px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>07</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 8px; font-weight: bold; color: #1a1612;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>Save</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="wordWrap"><bool>true</bool></property>
+                <property name="styleSheet"><string>font-size: 8px; color: #57534e; max-width: 45px;</string></property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel">
+                <property name="text"><string>—</string></property>
+                <property name="alignment"><set>Qt::AlignCenter</set></property>
+                <property name="styleSheet"><string>font-size: 7px; color: #d1d5db;</string></property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+
+            <item>
+             <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- ── Unified stats card: Completed Stages + Timing side by side ── -->
+       <item>
+        <widget class="QFrame" name="frame_stats_card">
+         <property name="styleSheet"><string>QFrame#frame_stats_card { background: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; } QLabel { background: transparent; border: none; }</string></property>
+         <layout class="QHBoxLayout" name="hl_stages_timing">
+          <property name="spacing"><number>0</number></property>
+          <property name="leftMargin"><number>0</number></property>
+          <property name="topMargin"><number>0</number></property>
+          <property name="rightMargin"><number>0</number></property>
+          <property name="bottomMargin"><number>0</number></property>
+
+          <!-- LEFT: Completed Stages -->
+          <item stretch="1">
+           <widget class="QFrame" name="groupbox_completed_stages">
+            <property name="styleSheet"><string>QFrame { background: transparent; border: none; }</string></property>
+            <layout class="QVBoxLayout" name="vl_completed">
+             <property name="spacing"><number>5</number></property>
+             <property name="leftMargin"><number>12</number></property>
+             <property name="topMargin"><number>10</number></property>
+             <property name="rightMargin"><number>10</number></property>
+             <property name="bottomMargin"><number>10</number></property>
+             <!-- Section header -->
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>COMPLETED STAGES</string></property>
+               <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e; padding-bottom: 2px;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QFrame">
+               <property name="frameShape"><enum>QFrame::HLine</enum></property>
+               <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+               <property name="styleSheet"><string>background: #f0ece6; max-height: 1px;</string></property>
+              </widget>
+             </item>
+             <!-- Stage rows: name + time on same line -->
+             <item>
+              <layout class="QHBoxLayout">
+               <property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>● Received</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>12ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #ea580c; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout">
+               <property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>● Preprocess</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>24ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #ea580c; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout">
+               <property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>● GeoCLIP</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>85ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #ea580c; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout">
+               <property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>● Features</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>310ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #ea580c; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+          </item>
+
+          <!-- Vertical divider -->
+          <item>
+           <widget class="QFrame">
+            <property name="frameShape"><enum>QFrame::VLine</enum></property>
+            <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+            <property name="styleSheet"><string>background: #e8e2d8; max-width: 1px; border: none;</string></property>
+           </widget>
+          </item>
+
+          <!-- RIGHT: Timing -->
+          <item stretch="1">
+           <widget class="QFrame" name="groupbox_timing">
+            <property name="styleSheet"><string>QFrame { background: transparent; border: none; }</string></property>
+            <layout class="QVBoxLayout" name="vl_timing">
+             <property name="spacing"><number>5</number></property>
+             <property name="leftMargin"><number>10</number></property>
+             <property name="topMargin"><number>10</number></property>
+             <property name="rightMargin"><number>12</number></property>
+             <property name="bottomMargin"><number>10</number></property>
+             <!-- Section header -->
+             <item>
+              <widget class="QLabel">
+               <property name="text"><string>TIMING</string></property>
+               <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e; padding-bottom: 2px;</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QFrame">
+               <property name="frameShape"><enum>QFrame::HLine</enum></property>
+               <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+               <property name="styleSheet"><string>background: #f0ece6; max-height: 1px;</string></property>
+              </widget>
+             </item>
+             <!-- Timing rows -->
+             <item>
+              <layout class="QHBoxLayout"><property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>Elapsed</string></property><property name="styleSheet"><string>font-size: 9px; color: #78716c;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>431ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #ea580c; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout"><property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>Est. Total</string></property><property name="styleSheet"><string>font-size: 9px; color: #78716c;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>~688ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e; font-weight: 600;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout"><property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>Remaining</string></property><property name="styleSheet"><string>font-size: 9px; color: #78716c;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>~249ms</string></property><property name="styleSheet"><string>font-size: 9px; color: #f59e0b; font-weight: bold;</string></property></widget></item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout"><property name="spacing"><number>4</number></property>
+               <item><widget class="QLabel"><property name="text"><string>Queue</string></property><property name="styleSheet"><string>font-size: 9px; color: #78716c;</string></property></widget></item>
+               <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>10</width><height>0</height></size></property></spacer></item>
+               <item><widget class="QLabel"><property name="text"><string>7 frames</string></property><property name="styleSheet"><string>font-size: 9px; color: #57534e; font-weight: 600;</string></property></widget></item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- ── Pipeline Status card ── -->
+       <item>
+        <widget class="QFrame" name="groupbox_process_status">
+         <property name="styleSheet"><string>QFrame#groupbox_process_status { background: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; } QLabel { background: transparent; border: none; }</string></property>
+         <layout class="QVBoxLayout" name="vl_status">
+          <property name="spacing"><number>2</number></property>
+          <property name="leftMargin"><number>12</number></property>
+          <property name="topMargin"><number>10</number></property>
+          <property name="rightMargin"><number>12</number></property>
+          <property name="bottomMargin"><number>8</number></property>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>PIPELINE STATUS</string></property>
+            <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e; padding-bottom: 2px;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame">
+            <property name="frameShape"><enum>QFrame::HLine</enum></property>
+            <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+            <property name="styleSheet"><string>background: #f0ece6; max-height: 1px; margin-bottom: 4px;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_status_upload">
+            <property name="text"><string>  Uploading image data</string></property>
+            <property name="minimumHeight"><number>26</number></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_status_analyze">
+            <property name="text"><string>  Analyzing metadata</string></property>
+            <property name="minimumHeight"><number>26</number></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_status_match">
+            <property name="text"><string>  Running image matcher</string></property>
+            <property name="minimumHeight"><number>26</number></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_status_prepare">
+            <property name="text"><string>  Preparing output layer</string></property>
+            <property name="minimumHeight"><number>26</number></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- ── Mission Insights card ── -->
+       <item>
+        <widget class="QFrame" name="groupbox_insights">
+         <property name="styleSheet"><string>QFrame#groupbox_insights { background: #ffffff; border: 1px solid #ece4d8; border-bottom: 2px solid #e3d6c4; border-radius: 12px; } QLabel { background: transparent; border: none; }</string></property>
+         <layout class="QVBoxLayout" name="vl_insights">
+          <property name="spacing"><number>4</number></property>
+          <property name="leftMargin"><number>12</number></property>
+          <property name="topMargin"><number>10</number></property>
+          <property name="rightMargin"><number>12</number></property>
+          <property name="bottomMargin"><number>10</number></property>
+          <item>
+           <widget class="QLabel">
+            <property name="text"><string>MISSION INSIGHTS</string></property>
+            <property name="styleSheet"><string>font-size: 9px; font-weight: bold; letter-spacing: 2px; color: #a8a29e; padding-bottom: 2px;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame">
+            <property name="frameShape"><enum>QFrame::HLine</enum></property>
+            <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+            <property name="styleSheet"><string>background: #f0ece6; max-height: 1px; margin-bottom: 2px;</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_insight_quality">
+            <property name="text"><string>[OK]  File Status: Your image is ready and validated</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_insight_speed">
+            <property name="text"><string>[...] Current Step: Analyzing geographic features...</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_insight_eta">
+            <property name="text"><string>[TIME] Time Remaining: Approximately 2-3 minutes</string></property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <item>
+        <spacer name="vSpacer_processing">
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>8</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_cancel_processing">
+         <property name="text"><string>Cancel Mission</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+     <!-- ══════════════════════════════════════════
+          PAGE 6 — RESULTS
+     ══════════════════════════════════════════ -->
+     <widget class="QWidget" name="page_results">
+      <layout class="QVBoxLayout" name="verticalLayout_results">
+       <property name="leftMargin"><number>32</number></property>
+       <property name="topMargin"><number>20</number></property>
+       <property name="rightMargin"><number>32</number></property>
+       <property name="bottomMargin"><number>22</number></property>
+       <property name="spacing"><number>6</number></property>
+
+       <item>
+        <layout class="QHBoxLayout">
+         <item>
+          <widget class="QLabel" name="label_step_indicator_3">
+           <property name="text"><string>STEP 03 / 03</string></property>
+          </widget>
+         </item>
+         <item>
+          <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_geo_located_badge">
+           <property name="text"><string>Geo-Located</string></property>
+           <property name="styleSheet">
+            <string>font-size: 9px; font-weight: bold; letter-spacing: 1px; color: #ffffff; background-color: #ea580c; padding: 3px 10px; border-radius: 10px; font-family: "Consolas", monospace;</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_screen3_title">
+         <property name="text"><string>Registration Complete</string></property>
+         <property name="styleSheet"><string>font-size: 20px; font-weight: 700; color: #059669; margin-top: 2px;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QFrame" name="line_div3">
+         <property name="frameShape"><enum>QFrame::HLine</enum></property>
+         <property name="frameShadow"><enum>QFrame::Plain</enum></property>
+         <property name="styleSheet"><string>background-color: #e8e2d8; max-height: 1px; margin-top: 6px; margin-bottom: 4px;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_checkmark">
+         <property name="text"><string>✓</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="minimumHeight"><number>90</number></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_complete_title">
+         <property name="text"><string>UAV layer georeferenced successfully</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="styleSheet"><string>font-size: 14px; font-weight: 700; color: #1a1612;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QLabel" name="label_complete_info">
+         <property name="text"><string>The registered layer has been added to your QGIS canvas and synced to the cloud.</string></property>
+         <property name="alignment"><set>Qt::AlignCenter</set></property>
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="styleSheet"><string>color: #78716c; font-size: 11px; margin: 2px 40px 10px 40px;</string></property>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QGroupBox" name="groupbox_results">
+         <property name="title"><string>NEXT ACTIONS</string></property>
+         <layout class="QVBoxLayout" name="vl_results_options">
+          <property name="spacing"><number>8</number></property>
+          <item>
+           <widget class="QPushButton" name="btn_view_map">
+            <property name="text"><string>View on Map</string></property>
+            <property name="minimumHeight"><number>44</number></property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout">
+            <property name="spacing"><number>10</number></property>
+            <item>
+             <widget class="QPushButton" name="btn_export_report">
+              <property name="text"><string>Export Report</string></property>
+              <property name="minimumHeight"><number>38</number></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btn_new_mission">
+              <property name="text"><string>New Mission</string></property>
+              <property name="minimumHeight"><number>38</number></property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_feedback_results">
+         <property name="text"><string>&#128172; Send Feedback</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+        </widget>
+       </item>
+
+       <item>
+        <spacer name="vSpacer_results">
+         <property name="orientation"><enum>Qt::Vertical</enum></property>
+         <property name="sizeHint" stdset="0"><size><width>20</width><height>16</height></size></property>
+        </spacer>
+       </item>
+
+       <item>
+        <widget class="QPushButton" name="btn_logout_results">
+         <property name="text"><string>Logout</string></property>
+         <property name="minimumHeight"><number>36</number></property>
+         <property name="styleSheet">
+          <string>
+QPushButton {
+    background-color: #ffffff;
+    color: #78716c;
+    border: 1.5px solid #d9cfc7;
+    border-radius: 6px;
+    padding: 9px 24px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #fff1f2;
+    color: #e11d48;
+    border-color: #fda4af;
+}
+QPushButton:pressed {
+    background-color: #ffe4e6;
+    border-color: #e11d48;
+}
+          </string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

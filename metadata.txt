@@ -1,0 +1,26 @@
+[general]
+name=ATLAS Geo-Dock
+qgisMinimumVersion=3.44
+qgisMaximumVersion=3.99
+description=QGIS integrated plugin for UAV Pose Estimation and UAV-to-Map Registration with batch processing and advanced alignment options
+version=1.1.0
+author=AIVE AI Systems
+email=luis.sentis@aivesystems.com
+about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. EXTERNAL DEPENDENCIES: requires the Python packages 'rasterio' and 'requests', which are not part of a standard QGIS installation. If they are missing the plugin reports it when opened. Install them into the Python that QGIS uses, from Plugins > Python Console: import subprocess, sys then subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'rasterio', 'requests']). See INSTALL.md in the repository for full instructions.
+tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
+repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
+changelog=
+    Version 1.1.0 - Production release. Points at the production service
+    (api.aivesystems.com / auth.aivesystems.com) over HTTPS. Sends altitude
+    provenance so the pipeline knows whether an altitude is height above
+    ground or above sea level, and no longer substitutes 0 m / 24 mm for
+    metadata a camera did not record.
+    Version 1.0.0 - Initial release with enhanced UI, batch processing support, and interactive map preview
+
+tags=UAV,georeferencing,image-registration,geospatial,remote-sensing
+
+homepage=https://github.com/AIVE-Systems-General/atlas-geo-plugin
+category=Raster
+icon=icon.png
+experimental=False
+deprecated=False

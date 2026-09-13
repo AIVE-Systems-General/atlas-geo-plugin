@@ -47,6 +47,47 @@ from qgis.PyQt import uic, QtWidgets, QtCore
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QPixmap, QColor
 from qgis.core import QgsProject, QgsRasterLayer
+from qgis.core import Qgis, QgsMessageLog
+
+# Non-fatal errors: failures the plugin deliberately recovers from are
+# recorded in the QGIS Log Messages panel under this tag instead of being
+# discarded, so support can see them without the user being interrupted.
+#
+# ⚠️ ONLY A FIXED CONTEXT LABEL AND THE EXCEPTION CLASS ARE EVER WRITTEN.
+# Exception messages can carry URLs, response bodies, file paths or image
+# metadata. Nothing may log tokens, authorization headers, email addresses
+# or GPS/EXIF values.
+_LOG_TAG = "ATLAS Geo-Dock"
+_LOG_INFO = Qgis.Info
+_LOG_WARNING = Qgis.Warning
+_log_once_contexts = set()
+_log_last_at = {}
+
+
+def _log_nonfatal(context, exc=None, level=_LOG_INFO, once=False,
+                  min_interval_s=0.0):
+    """Record a recovered, non-fatal failure in the QGIS message log.
+
+    context         fixed label naming the operation, never user data
+    exc             the exception recovered from; only its class is written
+    once            write only the first occurrence of this context
+    min_interval_s  skip repeats of this context within the interval
+
+    QgsMessageLog.logMessage is thread safe, so worker threads may call this.
+    """
+    if once:
+        if context in _log_once_contexts:
+            return
+        _log_once_contexts.add(context)
+    if min_interval_s:
+        now = time.monotonic()
+        last = _log_last_at.get(context)
+        if last is not None and now - last < min_interval_s:
+            return
+        _log_last_at[context] = now
+    message = context if exc is None else f"{context}: {type(exc).__name__}"
+    QgsMessageLog.logMessage(message, _LOG_TAG, level)
+
 
 FEEDBACK_EMAIL = "sales@aivesystems.com"
 
@@ -354,6 +395,13 @@ UPLOAD_CHUNK_SIZE  = int(os.getenv("ATLAS_UPLOAD_CHUNK", "20"))
 # (upload originals) without a code change.
 UPLOAD_MAX_EDGE     = int(os.getenv("ATLAS_UPLOAD_MAX_EDGE", "2048"))
 UPLOAD_JPEG_QUALITY = int(os.getenv("ATLAS_UPLOAD_JPEG_QUALITY", "85"))
+
+# Product limit for this release: at most 10 images in one submission. It is
+# separate from the account's image allowance, which the server enforces. A
+# constant rather than an environment override, so every entry point applies
+# the same number. The server does not enforce this limit per submission.
+MAX_IMAGES_PER_SUBMISSION = 10
+MAX_IMAGES_MESSAGE = "Maximum 10 images per submission."
 
 # ISO 3166-1 countries for the signup dropdown.
 #
@@ -1043,8 +1091,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 for line in fh:
                     if line.strip().startswith("version="):
                         return line.split("=", 1)[1].strip()
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            _log_nonfatal("plugin version not read from metadata.txt", exc,
+                          once=True)
         return "?"
 
     def _update_header_status(self):
@@ -1513,8 +1562,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         menu = QtWidgets.QMenu(self)
         try:
             menu.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint, True)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            _log_nonfatal("menu drop shadow not disabled", exc, once=True)
         menu.setStyleSheet(
             "QMenu { background:#ffffff; border:1px solid #d1d5db; border-radius:2px; padding:4px; }"
             "QMenu::item { padding:8px 22px 8px 12px; border-radius:2px; font-size:12px; color:#44403c; }"
@@ -1663,8 +1712,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             f = gr.font(); f.setBold(True); f.setPointSize(8)
             try:
                 f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                _log_nonfatal("letter spacing not applied", exc, once=True)
             gr.setFont(f)
             gr.setStyleSheet(
                 "QGroupBox { border:none; background:transparent; margin-top:12px;"
@@ -1837,11 +1886,19 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             kind = {"tile_feat1": "target", "tile_feat2": "layers",
                     "tile_feat3": "cloud"}.get(name)
             if icon_lbl is not None and kind:
+                # Render before clearing the emoji. Clearing first meant a
+                # failed render left the tile blank instead of keeping it.
                 try:
+                    icon = self._svg_icon(kind, size=26)
+                except (ImportError, ValueError) as exc:
+                    # ImportError: no QtSvg. ValueError: _svg_icon's own
+                    # "SVG failed to load".
+                    _log_nonfatal(
+                        "feature tile icons unavailable, keeping emoji",
+                        exc, once=True)
+                else:
                     icon_lbl.setText("")
-                    icon_lbl.setPixmap(self._svg_icon(kind, size=26))
-                except Exception:
-                    pass   # QtSvg unavailable → keep the original emoji
+                    icon_lbl.setPixmap(icon)
             title_lbl = tlay.itemAt(1).widget()   # bold title
             tag_lbl   = tlay.itemAt(2).widget()   # tech tag, text set below
             # ⚠️ SET THE TAG TEXT HERE, do not inherit it from the .ui.
@@ -2736,8 +2793,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # OS shadow for a tighter look.
             try:
                 menu.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint, True)
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                _log_nonfatal("menu drop shadow not disabled", exc, once=True)
             menu.setStyleSheet(
                 "QMenu { background:#ffffff; border:1px solid #d1d5db; border-radius:2px; padding:4px; }"
                 "QMenu::item { padding:8px 22px 8px 12px; border-radius:2px; font-size:12px; color:#44403c; }"
@@ -2883,8 +2940,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 f = widget.font(); f.setBold(True); f.setPointSize(pt)
                 try:
                     f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
-                except Exception:
-                    pass
+                except (AttributeError, TypeError) as exc:
+                    _log_nonfatal("letter spacing not applied", exc, once=True)
                 widget.setFont(f)
 
             for gbname in ("groupbox_mission_name", "groupbox_base_map"):
@@ -3152,8 +3209,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._current_tier = str(d.get("tier", "") or "payg").lower()
                 self._last_balance = d
                 return d
-        except Exception:
-            pass
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            # The chip shows its no-data state; the server enforces limits.
+            _log_nonfatal("balance unavailable", exc, min_interval_s=300)
         return None
 
     def _format_balance(self, d):
@@ -4632,25 +4690,49 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._migration_prompt_seen = False
         try:
             self._rebuild_recent_uploads()   # clears the Recent Uploads panel
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError) as exc:
+            # In-memory state is already wiped above; only the panel may
+            # still show the previous user's file names.
+            _log_nonfatal("recent uploads panel not cleared", exc,
+                          level=_LOG_WARNING)
         # Wipe any visible remnants on the setup screen (filename, mission name, drop zone).
-        try:
-            if hasattr(self, "input_mission_name"):
-                self.input_mission_name.clear()
-            if hasattr(self, "label_file_info"):
-                self.label_file_info.setText("No file selected")
-                self.label_file_info.setStyleSheet(
-                    "color: #a8a29e; font-size: 11px; font-style: italic;")
-            if hasattr(self, "label_drop_zone"):
-                self.label_drop_zone.setText("Drop image here")
-                self.label_drop_zone.setStyleSheet("")
-            if hasattr(self, "frame_drop_zone"):
-                self.frame_drop_zone.setStyleSheet("")   # revert dashed box (was green after file-select)
-            if hasattr(self, "btn_next_setup"):
-                self.btn_next_setup.setEnabled(False)
-        except Exception:
-            pass
+        #
+        # Each reset is attempted on its own. One try around all of them
+        # meant the first failure skipped every later reset, so the previous
+        # user's mission name or file label could stay visible to the next
+        # person to sign in.
+
+        def _reset_mission_name(w):
+            w.clear()
+
+        def _reset_file_info(w):
+            w.setText("No file selected")
+            w.setStyleSheet(
+                "color: #a8a29e; font-size: 11px; font-style: italic;")
+
+        def _reset_drop_label(w):
+            w.setText("Drop image here")
+            w.setStyleSheet("")
+
+        def _reset_drop_frame(w):
+            # revert dashed box (was green after file-select)
+            w.setStyleSheet("")
+
+        def _reset_next_button(w):
+            w.setEnabled(False)
+
+        for attr, reset in (("input_mission_name", _reset_mission_name),
+                            ("label_file_info", _reset_file_info),
+                            ("label_drop_zone", _reset_drop_label),
+                            ("frame_drop_zone", _reset_drop_frame),
+                            ("btn_next_setup", _reset_next_button)):
+            if not hasattr(self, attr):
+                continue
+            try:
+                reset(getattr(self, attr))
+            except (RuntimeError, AttributeError) as exc:
+                _log_nonfatal(f"setup screen reset skipped: {attr}", exc,
+                              level=_LOG_WARNING)
 
     def _handle_logout(self):
         if self._themed_confirm(
@@ -4665,8 +4747,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             if self.access_token:
                 headers["Authorization"] = f"Bearer {self.access_token}"
             requests.post(LOGOUT_URL, json={}, headers=headers, timeout=10)
-        except Exception:
-            pass
+        except requests.RequestException as exc:
+            # Sign-out still completes locally in the finally block; only the
+            # server's confirmation is missing. Class name only, never the
+            # token.
+            _log_nonfatal("server logout not confirmed", exc,
+                          level=_LOG_WARNING)
         finally:
             self.access_token = None
             self.refresh_token = None
@@ -4739,8 +4825,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             folder_icon = self._svg_icon("folder", size=30)
         except Exception:
             files_icon, folder_icon = "🗂", "📁"   # emoji fallback if QtSvg missing
-        files_frame, files_btn   = self._choice_card(files_icon, "Select Files", "Pick up to 10 individual images")
-        folder_frame, folder_btn = self._choice_card(folder_icon, "Select Folder", "Load every image in a folder")
+        files_frame, files_btn = self._choice_card(
+            files_icon, "Select Files", MAX_IMAGES_MESSAGE)
+        folder_frame, folder_btn = self._choice_card(
+            folder_icon, "Select Folder", MAX_IMAGES_MESSAGE)
         row.addWidget(files_frame)
         row.addWidget(folder_frame)
         dlg.body.addLayout(row)
@@ -4767,7 +4855,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _browse_files(self):
         filenames, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Select UAV Images (Max 10)", "",
+            self, "Select UAV Images (Maximum 10 images per submission)", "",
             "Drone images with GPS (*.jpg *.jpeg *.tif *.tiff *.geotiff);;All files (*.*)"
         )
         if not filenames:
@@ -4798,16 +4886,17 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._load_image_list(found, source_folder=folder)
 
     def _load_image_list(self, filenames: list, source_folder: str = None):
-        # Advertised per-batch cap; the upload chunks these into UPLOAD_CHUNK_SIZE
-        # requests under one batch_id, so large selections are fine.
-        MAX_BATCH_IMAGES = int(os.getenv("ATLAS_MAX_BATCH_IMAGES", "5000"))
-        if len(filenames) > MAX_BATCH_IMAGES:
-            if not self._themed_confirm(
-                    "Too many images",
-                    f"Found {len(filenames)} images. Only the first {MAX_BATCH_IMAGES} will be processed.\n\nContinue?",
-                    confirm_text="Continue", cancel_text="Cancel", accent="orange"):
-                return
-            filenames = filenames[:MAX_BATCH_IMAGES]
+        # Refused whole, never trimmed: silently keeping the first ten would
+        # submit a set of images the user did not choose. Checked before any
+        # metadata is read, and any earlier selection is left as it was.
+        if len(filenames) > MAX_IMAGES_PER_SUBMISSION:
+            where = "This folder contains" if source_folder else "You selected"
+            self._themed_notice(
+                "Too many images",
+                f"{where} {len(filenames)} images. {MAX_IMAGES_MESSAGE}\n\n"
+                "Choose 10 or fewer images and try again.",
+                accent="red", button="OK")
+            return
 
         # Pre-upload metadata gate: georeferencing is seeded by embedded GPS, so an
         # image without it is a guaranteed null-island failure. Flag/exclude those
@@ -5098,6 +5187,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             self._themed_notice("No files selected", "Please select UAV images first.",
                                 accent="red", button="OK")
             return
+        # Checked again at submission, not only at selection, so no path into
+        # processing can send more than the limit.
+        if len(self.selected_files) > MAX_IMAGES_PER_SUBMISSION:
+            self._themed_notice(
+                "Too many images",
+                f"{len(self.selected_files)} images are selected. "
+                f"{MAX_IMAGES_MESSAGE}\n\n"
+                "Choose 10 or fewer images and try again.",
+                accent="red", button="OK")
+            return
         self._style_processing_page()
         self.stacked_pages.setCurrentIndex(self.PAGE_PROCESSING)
         self._start_processing()
@@ -5197,8 +5296,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 if data.get("refresh_token"):
                     self.refresh_token = data.get("refresh_token")
                 return True
-        except Exception:
-            pass
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            # Fails closed: False sends the caller to "sign in again". Class
+            # name only, never the response body, which carries tokens.
+            _log_nonfatal("token refresh failed", exc, level=_LOG_WARNING)
         return False
 
     def _authed_request(self, method: str, url: str, **kwargs):
@@ -5227,8 +5328,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             resp = self._authed_request("GET", STORAGE_USAGE_URL, timeout=10)
             if resp.status_code == 200:
                 return resp.json()
-        except Exception:
-            pass
+        except (requests.RequestException, ValueError) as exc:
+            # Callers treat None as "storage usage unavailable".
+            _log_nonfatal("storage usage unavailable", exc, min_interval_s=300)
         return None
 
     def _free_up_storage(self):
@@ -5561,9 +5663,22 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             if resp.status_code == 200:
                 return resp.json().get("mission_id")
-        except Exception:
-            pass
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            # The upload still goes ahead, as before, without the mission
+            # grouping.
+            _log_nonfatal("mission row not created", exc, level=_LOG_WARNING)
         return None
+
+    def _note_status_poll(self, exc=None):
+        """Log the first failed status poll and the recovery, not retries."""
+        failing = getattr(self, "_status_poll_failing", False)
+        if exc is not None and not failing:
+            self._status_poll_failing = True
+            _log_nonfatal("job status poll failed, retrying", exc,
+                          level=_LOG_WARNING)
+        elif exc is None and failing:
+            self._status_poll_failing = False
+            _log_nonfatal("job status poll recovered")
 
     def _fetch_job_statuses(self, ids):
         """Fetch statuses for many jobs in ONE request via POST /status/batch
@@ -5576,16 +5691,23 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 json={"job_ids": ids}, timeout=15,
             )
             if resp.status_code == 200:
-                return resp.json().get("results", {}) or {}
+                results = resp.json().get("results", {}) or {}
+                self._note_status_poll()
+                return results
             if resp.status_code in (404, 405):
                 return self._fetch_job_statuses_fallback(ids)   # older backend
-        except Exception:
-            pass
+        except Exception as exc:
+            # Deliberately broad: this is the boundary of the background
+            # polling loop. An unexpected error must not fail a batch whose
+            # images were already processed and charged; the caller retries
+            # next cycle.
+            self._note_status_poll(exc)
         return {}
 
     def _fetch_job_statuses_fallback(self, ids):
         """Legacy per-job GET /status/{id} when /status/batch isn't available."""
         out = {}
+        cycle_error = None
         for jid in ids:
             try:
                 resp = self._authed_request("GET", f"{ATLAS_BASE_URL}/status/{jid}", timeout=10)
@@ -5597,8 +5719,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         out[jid] = resp.json().get("detail", {"status": "failed", "reason": "unknown"})
                     except Exception:
                         out[jid] = {"status": "failed", "reason": "unknown"}
-            except Exception:
-                continue
+            except Exception as exc:
+                # Same polling boundary as _fetch_job_statuses: this job stays
+                # pending and is retried next cycle. One error is logged per
+                # cycle.
+                if cycle_error is None:
+                    cycle_error = exc
+        self._note_status_poll(cycle_error)
         return out
 
     def _prepare_upload_files(self, paths):
@@ -5811,8 +5938,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         d = response.json().get("detail")
                         if isinstance(d, dict):
                             info = d
-                    except Exception:
-                        pass
+                    except (ValueError, AttributeError):
+                        # Not JSON, or not an object: generic message below.
+                        info = {}
                     if info.get("code") == "SUBSCRIPTION_PAUSED":
                         raise Exception(info.get("message") or
                             "Your subscription is paused due to a failed payment. Open "
@@ -5847,8 +5975,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     detail = None
                     try:
                         detail = response.json().get("detail")
-                    except Exception:
-                        pass
+                    except (ValueError, AttributeError):
+                        # Not JSON, or not an object: generic message below.
+                        detail = None
                     if isinstance(detail, dict) and detail.get("code") == "STORAGE_QUOTA_EXCEEDED":
                         raise Exception(detail.get("message") or
                             "This upload would exceed your storage quota. Open the account "
@@ -6025,15 +6154,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                                     "lon":         per_image_meta[job_index]["lon"],
                                 },
                             }
-                            # Printed as well as stored. When this happened
-                            # live, the only evidence was a missing row in a
-                            # PDF and the cause had to be inferred. Job id,
-                            # source name, destination and the OS error.
-                            print(
-                                "ATLAS local save FAILED "
-                                "job=%s file=%r dest=%s error=%r"
-                                % (jid, job_files.get(jid, ""),
-                                   out_path, save_err))
+                            # Recorded for support without identifying data.
+                            # The job, source name, destination and OS error
+                            # stay in _local_save_failures for the Results
+                            # screen and "Save results again"; none of them
+                            # may reach the console or the message log.
+                            _log_nonfatal("result not saved to this computer",
+                                          level=_LOG_WARNING)
                             QtCore.QMetaObject.invokeMethod(
                                 self, "_set_upload_status", QtCore.Qt.QueuedConnection,
                                 QtCore.Q_ARG(str, job_files.get(jid, "")),
@@ -6236,8 +6363,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         if '1' in ref:
                             altitude = -altitude
                         return altitude, self.ALT_SOURCE_MSL
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort boundary, deliberately broad: unknown altitude
+            # travels as null and the worker falls back to its own parser, so
+            # nothing raised while reading EXIF may stop an otherwise valid
+            # upload. GDAL can raise errors that are not OSError. Class name
+            # only, never the path or a metadata value.
+            _log_nonfatal("EXIF altitude not read", exc)
         return None, self.ALT_SOURCE_UNKNOWN
 
     def _extract_focal35_from_raw_xmp(self, image_path: str) -> float:
@@ -6253,8 +6385,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     m = re.search(r'(\d+(?:\.\d+)?)', str(focal_str))
                     if m:
                         return float(m.group(1))
-        except Exception:
-            pass  # EXIF read failed — fall through to raw-XMP parsing below
+        except Exception as exc:
+            # Best-effort boundary, deliberately broad: an EXIF read failure
+            # of any kind falls through to the raw-XMP parsing below and never
+            # blocks the upload. Class name only.
+            _log_nonfatal("EXIF focal length not read", exc)
         # Then try raw XMP
         with open(image_path, 'rb') as f:
             raw = f.read(1024 * 512)
@@ -6536,8 +6671,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     m = re.search(pattern, text)
                     if m:
                         return float(m.group(1))
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort boundary, deliberately broad: an unknown pitch must
+            # never block an upload (see the docstring). Class name only.
+            _log_nonfatal("XMP gimbal pitch not read", exc)
         return None
 
     def _tilt_from_nadir(self, image_path: str):
@@ -6577,8 +6714,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     src = lyr.source().split("|")[0]      # strip any provider suffix
                     if os.path.normcase(os.path.abspath(src)) == target:
                         proj.removeMapLayer(lyr.id())
-                except Exception:
-                    continue
+                except (RuntimeError, ValueError) as exc:
+                    # Skip this layer and check the rest. Anything else still
+                    # reaches the handler below, which abandons the cleanup,
+                    # not the load.
+                    _log_nonfatal("stale layer check skipped", exc)
         except Exception as e:
             print(f"stale-layer cleanup skipped: {e}")
 
@@ -6596,8 +6736,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             px = rt.TransparentThreeValuePixel()
             px.red = 0; px.green = 0; px.blue = 0
             rt.setTransparentThreeValuePixelList([px])
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            # Cosmetic: black warp borders stay opaque; the layer is loaded.
+            _log_nonfatal("result layer border transparency not applied",
+                          exc, once=True)
         layer.setOpacity(0.75)
         return layer
 
@@ -6736,8 +6878,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         f.setBold(True)
         try:
             f.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            _log_nonfatal("letter spacing not applied", exc, once=True)
         lbl.setFont(f)
         lbl.setStyleSheet(
             "font-size: 10px; color: #9a948c; border-left: 3px solid #EA580C;"
@@ -7322,8 +7464,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     f"Pipeline complete: {n} of {n + n_fail} georeferenced. Generating report…"
                     if n_fail else
                     "Pipeline complete. Generating report…")
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError) as exc:
+            # Visual settle only: the Results page already has real counts.
+            _log_nonfatal("completion screen not updated", exc,
+                          level=_LOG_WARNING)
         QtCore.QTimer.singleShot(
             1900, lambda: self.stacked_pages.setCurrentIndex(self.PAGE_RESULTS))
 
@@ -7391,8 +7535,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         _cf = card.font(); _cf.setBold(True); _cf.setPointSize(8)
         try:
             _cf.setLetterSpacing(_QFont.AbsoluteSpacing, 1.0)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            _log_nonfatal("letter spacing not applied", exc, once=True)
         card.setFont(_cf)
         card.setStyleSheet(
             "QGroupBox { border:none; background:transparent; margin-top:12px;"
@@ -7507,8 +7651,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             px = rt.TransparentThreeValuePixel()
             px.red = 0; px.green = 0; px.blue = 0
             rt.setTransparentThreeValuePixelList([px])
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            # Cosmetic: black warp borders stay opaque; the mosaic is loaded.
+            _log_nonfatal("mosaic layer border transparency not applied",
+                          exc, once=True)
         layer.setOpacity(1.0)
         self.iface.setActiveLayer(layer)
         self.iface.zoomToActiveLayer()
@@ -7723,6 +7869,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             choice = combo.currentText()
 
         attribution = ""
+        # Set before either branch. Only the Satellite branch mints a tile
+        # session, but the reuse check below reads it on every path, so the
+        # OpenStreetMap choice raised UnboundLocalError and View on Map failed.
+        session = None
         if choice == "OpenStreetMap":
             reuse_names = ("OpenStreetMap",)
             candidates = [(
@@ -7965,7 +8115,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     def _combined_extent(self, layers, canvas_crs):
         """Union of every layer's extent, reprojected into the canvas CRS.
         Returns a QgsRectangle, or None if there are no valid layers."""
-        from qgis.core import QgsCoordinateTransform, QgsRectangle
+        from qgis.core import (QgsCoordinateTransform, QgsCsException,
+                               QgsRectangle)
         union = None
         for lyr in layers:
             if not lyr or not lyr.isValid():
@@ -7976,7 +8127,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     ext = QgsCoordinateTransform(
                         lyr.crs(), canvas_crs, QgsProject.instance()
                     ).transformBoundingBox(ext)
-                except Exception:
+                except QgsCsException as exc:
+                    # This layer cannot be framed in the canvas CRS; frame
+                    # the others.
+                    _log_nonfatal(
+                        "layer extent not reprojected for View on map",
+                        exc, once=True)
                     continue
             if ext.isEmpty():
                 continue
@@ -7988,9 +8144,20 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _flash_layers(self, layers, canvas, flashes=3, interval=300):
         """Blink several layers together (batch highlight) using one timer."""
-        root = QgsProject.instance().layerTreeRoot()
-        tree = [t for t in (root.findLayer(l.id()) for l in layers) if t is not None]
-        if not tree:
+        from qgis.PyQt import sip
+        # Layers are tracked by ID and looked up again on every tick. Holding
+        # the tree nodes meant a layer removed during the animation left a
+        # deleted node behind, and every remaining tick raised RuntimeError.
+        # A layer already removed before the flash began is left out by
+        # asking sip, so no error is raised and none is swallowed.
+        layer_ids = [lyr.id() for lyr in layers if not sip.isdeleted(lyr)]
+
+        def _nodes():
+            root = QgsProject.instance().layerTreeRoot()
+            found = (root.findLayer(i) for i in layer_ids)
+            return [t for t in found if t is not None]
+
+        if not _nodes():
             return
         total = flashes * 2
         state = {"count": 0}
@@ -7999,6 +8166,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         timer.setInterval(interval)
 
         def _toggle():
+            tree = _nodes()
+            if not tree:
+                timer.stop()            # every flashed layer has been removed
+                return
             if state["count"] >= total:
                 timer.stop()
                 for t in tree:
@@ -8368,8 +8539,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             printer.setPageSize(QPrinter.A4)
             try:
                 printer.setPageMargins(14, 14, 14, 14, QPrinter.Millimeter)
-            except Exception:
-                pass  # older/newer signature — default margins are fine
+            except (AttributeError, TypeError) as exc:
+                # Older/newer signature: default margins are fine.
+                _log_nonfatal("PDF report margins not set, using defaults",
+                              exc, once=True)
 
             doc = QTextDocument()
             doc.setDefaultFont(QFont("Segoe UI", 9))
@@ -8570,8 +8743,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # menu widgets, which go through a queued slot.
                 self._trial_request_previous = d.get("previous") or {}
                 return str(d.get("state") or "none").lower()
-        except Exception:
-            pass
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            # "none" keeps older backends working; the server decides.
+            _log_nonfatal("trial request status unavailable", exc,
+                          min_interval_s=300)
         return "none"
 
     @QtCore.pyqtSlot(str)

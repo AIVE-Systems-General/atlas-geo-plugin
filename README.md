@@ -29,9 +29,10 @@ Privacy Policy, which the plugin links to at sign-up.
 ## Requirements
 
 - QGIS 3.44 or newer
-- Python packages `rasterio` and `requests`
+- No additional Python packages
 
-`numpy` and GDAL ship with QGIS. `rasterio` and `requests` may not be present
+GDAL ships with QGIS and supplies everything the plugin needs, so a
+standard QGIS installation requires no extra packages.
 in a stock install. The plugin tells you when they are missing.
 
 See [INSTALL.md](INSTALL.md) for installation instructions.

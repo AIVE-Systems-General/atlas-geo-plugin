@@ -1,15 +1,36 @@
 [general]
 name=ATLAS Geo-Dock
 qgisMinimumVersion=3.44
-qgisMaximumVersion=3.99
+qgisMaximumVersion=4.2.99
 description=QGIS integrated plugin for UAV Pose Estimation and UAV-to-Map Registration with batch processing and advanced alignment options
-version=1.1.1
+version=1.1.2
 author=AIVE AI Systems
 email=luis.sentis@aivesystems.com
-about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. EXTERNAL DEPENDENCIES: requires the Python packages 'rasterio' and 'requests', which are not part of a standard QGIS installation. If they are missing the plugin reports it when opened. Install them into the Python that QGIS uses, from Plugins > Python Console: import subprocess, sys then subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'rasterio', 'requests']). See INSTALL.md in the repository for full instructions.
+about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. DEPENDENCIES: none beyond a standard QGIS installation. The plugin uses the GDAL and Qt libraries QGIS already ships.
 tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
 repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
 changelog=
+    Version 1.1.2 - QGIS 4 support and no external Python dependencies.
+    One package now serves QGIS 3.44 LTR and the QGIS 4.2 series. Removes
+    the requirement to install the 'rasterio' package by hand: image
+    metadata and GeoTIFF handling use the GDAL library QGIS already ships,
+    so a standard QGIS installation needs nothing added. Qt6 requires the
+    scoped form of every enum that Qt5 allowed unscoped, which prevented
+    the plugin from opening on QGIS 4; all Qt access now uses the scoped
+    spelling, which Qt5 accepts as well. Signing in and signing out no
+    longer fail on QGIS 4, where notification levels had to become named
+    values rather than plain numbers. PDF and CSV report export works on
+    QGIS 4 again, where Qt6 removed the older printer constants, changed
+    the page margin call and renamed the document print method; export now
+    uses the page layout interface, which behaves identically on both Qt
+    versions and still produces an A4 page with 14 mm margins. Also fixes
+    a fault that turned any start-up error into a permanent one: the
+    first-run flag was cleared before the dialog was built, so a single
+    failure left the plugin unable to open again and reported a misleading
+    missing-attribute error instead of the real cause. Start-up failures
+    are now reported in the QGIS message log with a readable message and a
+    reference code, and disabling the plugin releases the dialog and its
+    toolbar action.
     Version 1.1.1 - Security and reliability update. Resolves the QGIS
     plugin repository security scan findings: recoverable errors are now
     handled explicitly and recorded in the QGIS message log instead of

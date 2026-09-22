@@ -29,25 +29,184 @@ import requests
 import json
 from pathlib import Path
 from qgis.core import QgsRectangle
-try:
-    import rasterio
-    from rasterio.transform import from_bounds
-    from rasterio.crs import CRS
-    RASTERIO_AVAILABLE = True
-except ImportError:
-    # rasterio powers georeferencing + report output but is NOT bundled with a stock
-    # QGIS install. Importing defensively lets the plugin still load and show a clear
-    # "install rasterio" message (see INSTALL.md) instead of failing to load entirely.
-    rasterio = None
-    from_bounds = None
-    CRS = None
-    RASTERIO_AVAILABLE = False
+# GDAL, not rasterio. rasterio is NOT bundled with QGIS on any platform we
+# tested: absent from the official QGIS 4.2.1 image, and on Windows QGIS 3.44 it
+# only appears when a user has pip-installed it into their own site-packages.
+# Requiring it meant the plugin's metadata extraction raised ModuleNotFoundError
+# on a stock install, so uploads went out with no GPS. GDAL ships with QGIS by
+# definition, and rasterio is a wrapper over it: verified on DJI, Sony and
+# non-DJI frames, gdal.Open(p).GetMetadata() returns a dict identical to
+# rasterio.open(p).tags() (same keys, same values), so the parsing below is
+# unchanged.
+from osgeo import gdal, osr
 
 from qgis.PyQt import uic, QtWidgets, QtCore
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QPixmap, QColor
 from qgis.core import QgsProject, QgsRasterLayer
 from qgis.core import Qgis, QgsMessageLog
+
+# GDAL's identity geotransform, returned when a file carries no georeferencing.
+_GDAL_IDENTITY_GT = (0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+class _gdal_quiet:
+    """Scoped GDAL error/exception mode for this plugin's reads only.
+
+    Two things make this necessary:
+
+    1. The bindings emit a FutureWarning if neither UseExceptions() nor
+       DontUseExceptions() has been called, and in GDAL 4.0 exceptions become
+       the default. The helpers below are written against the None-returning
+       style, so the mode is stated explicitly rather than inherited.
+    2. It must NOT be stated globally. gdal.UseExceptions() is process-wide and
+       would change behaviour for QGIS itself and for every other plugin in the
+       session. ExceptionMgr scopes the change and restores the previous value
+       on exit, which was verified on GDAL 3.10.3 and 3.12.3.
+
+    GDAL's error HANDLER is deliberately left alone, so genuine GDAL errors
+    still reach the log instead of being swallowed.
+    """
+
+    def __enter__(self):
+        self._mgr = None
+        try:
+            if hasattr(gdal, "ExceptionMgr"):
+                self._mgr = gdal.ExceptionMgr(useExceptions=False)
+                self._mgr.__enter__()
+        except Exception:                                     # noqa: BLE001
+            self._mgr = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._mgr is not None:
+            try:
+                self._mgr.__exit__(*exc)
+            except Exception as err:                          # noqa: BLE001
+                # Recorded, not swallowed. Failing to restore GDAL's exception
+                # mode leaves the whole process in a state this plugin chose,
+                # which is precisely the kind of silent failure the 1.1.1
+                # security review required to be logged.
+                _log_nonfatal("GDAL exception mode not restored", err,
+                              level=_LOG_WARNING, once=True)
+        return False
+
+
+def _image_tags(path):
+    """Metadata tags for an image, the GDAL equivalent of rasterio's .tags().
+
+    Returns {} rather than raising, because every caller treats a missing tag
+    as "unknown" and an unreadable image must never stop an upload that is
+    otherwise valid.
+
+    The dataset is closed explicitly. On Windows an open GDAL handle keeps a
+    lock on the file, and these images are ones the user may be re-selecting
+    or the plugin may later re-read.
+    """
+    ds = None
+    try:
+        with _gdal_quiet():
+            ds = gdal.Open(path, gdal.GA_ReadOnly)
+        if ds is None:
+            return {}
+        # The EXIF_* keys live in the DEFAULT metadata domain, which is what
+        # rasterio's .tags() reads. Verified identical across DJI, Sony and
+        # non-DJI frames. The dedicated "EXIF" domain is empty in these builds,
+        # so reading only that would silently return nothing.
+        return dict(ds.GetMetadata() or {})
+    except Exception as err:                                  # noqa: BLE001
+        # Logged, not silent: the 1.1.1 security review required recoverable
+        # errors to reach the QGIS log. once=True so a 200-image batch cannot
+        # flood it. Class name only, never the path or a metadata value.
+        _log_nonfatal("image metadata not read", err, once=True)
+        return {}
+    finally:
+        ds = None
+
+
+def _image_xmp(path):
+    """Raw XMP for an image, or '' if absent.
+
+    GDAL returns the xml:XMP domain as a LIST of strings, unlike the plain dict
+    of the default domain, so the shape is normalised here once.
+    """
+    ds = None
+    try:
+        with _gdal_quiet():
+            ds = gdal.Open(path, gdal.GA_ReadOnly)
+        if ds is None:
+            return ""
+        xmp = ds.GetMetadata("xml:XMP")
+        if not xmp:
+            return ""
+        if isinstance(xmp, (list, tuple)):
+            return "\n".join(str(x) for x in xmp)
+        if isinstance(xmp, dict):
+            return "\n".join(str(v) for v in xmp.values())
+        return str(xmp)
+    except Exception as err:                                  # noqa: BLE001
+        _log_nonfatal("image XMP not read", err, once=True)
+        return ""
+    finally:
+        ds = None
+
+
+def _raster_info(path):
+    """(has_georeferencing, width, height, band_count, gdal_dtype) or None.
+
+    has_georeferencing mirrors the previous rasterio test exactly: a CRS is
+    present AND the geotransform is not the identity.
+    """
+    ds = None
+    try:
+        with _gdal_quiet():
+            ds = gdal.Open(path, gdal.GA_ReadOnly)
+        if ds is None:
+            return None
+        gt = ds.GetGeoTransform(can_return_null=True)
+        proj = ds.GetProjection()
+        has_geo = bool(proj) and gt is not None and tuple(gt) != _GDAL_IDENTITY_GT
+        return (has_geo, ds.RasterXSize, ds.RasterYSize, ds.RasterCount,
+                ds.GetRasterBand(1).DataType if ds.RasterCount else gdal.GDT_Byte)
+    except Exception as err:                                  # noqa: BLE001
+        _log_nonfatal("raster header not read", err, once=True)
+        return None
+    finally:
+        ds = None
+
+
+def _apply_geotransform_in_place(path, west, north, east, south, epsg=4326):
+    """Attach a geotransform and CRS to an existing raster, without rewriting it.
+
+    The previous implementation read every band into memory and wrote a whole
+    new file just to add georeferencing. GDAL can update the header in place,
+    which avoids copying the pixels and cannot alter them.
+
+    Both rasterio's from_bounds and a GDAL geotransform describe the OUTER
+    corner of the top-left pixel, so translating between them introduces no
+    half-pixel shift. Placement is unchanged.
+    """
+    ds = None
+    try:
+        with _gdal_quiet():
+            ds = gdal.Open(path, gdal.GA_Update)
+        if ds is None:
+            return False
+        w, h = ds.RasterXSize, ds.RasterYSize
+        if not w or not h:
+            return False
+        ds.SetGeoTransform((float(west), (float(east) - float(west)) / w, 0.0,
+                            float(north), 0.0, -((float(north) - float(south)) / h)))
+        sr = osr.SpatialReference()
+        sr.ImportFromEPSG(int(epsg))
+        ds.SetProjection(sr.ExportToWkt())
+        ds.FlushCache()
+        return True
+    except Exception as err:                                  # noqa: BLE001
+        _log_nonfatal("georeferencing not attached", err, once=True)
+        return False
+    finally:
+        ds = None
 
 # Non-fatal errors: failures the plugin deliberately recovers from are
 # recorded in the QGIS Log Messages panel under this tag instead of being
@@ -125,7 +284,7 @@ class FeedbackDialog(QtWidgets.QDialog):
         root.addWidget(sub)
 
         sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         sep.setStyleSheet("background-color: #e8e2d8; max-height: 1px;")
         root.addWidget(sep)
 
@@ -279,6 +438,7 @@ class FeedbackDialog(QtWidgets.QDialog):
                 self, "Feedback ready",
                 "Your email client has been opened with the feedback pre-filled. "
                 "Hit Send in your email app to submit it.")
+
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'atlas_geo_plugin_dialog_base.ui'))
@@ -571,7 +731,7 @@ class TrialRequestDialog(QtWidgets.QDialog):
         root.addWidget(sub)
 
         sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         sep.setStyleSheet("background-color: #e8e2d8; max-height: 1px;")
         root.addWidget(sep)
 
@@ -630,7 +790,7 @@ class TrialRequestDialog(QtWidgets.QDialog):
                 "<b>Tip:</b> Be as specific as possible about your drone platform, "
                 "hardware integration (e.g. LiDAR, IMU, camera specs), and "
                 "geolocation needs to speed up approval.")
-            tip.setTextFormat(QtCore.Qt.RichText)
+            tip.setTextFormat(QtCore.Qt.TextFormat.RichText)
             tip.setWordWrap(True)
             tip.setStyleSheet(
                 "font-size: 10px; color: #78716c; background: #f2ede4;"
@@ -780,8 +940,8 @@ class ThemedDialog(QtWidgets.QDialog):
 
     def __init__(self, parent=None, title="ATLAS-GEO", subtitle=""):
         super().__init__(parent)
-        self.setWindowFlags(QtCore.Qt.Dialog | QtCore.Qt.FramelessWindowHint)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setWindowFlags(QtCore.Qt.WindowType.Dialog | QtCore.Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setModal(True)
         self._drag_pos = None
 
@@ -823,19 +983,19 @@ class ThemedDialog(QtWidgets.QDialog):
         hdr.addStretch(1)
         close_btn = QtWidgets.QPushButton("✕")
         close_btn.setFixedSize(28, 28)
-        close_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        close_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet(
             "QPushButton { background: transparent; color: #a8a29e; border: none;"
             "  border-radius: 14px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background: #ece6dd; color: #1a1612; }")
         close_btn.clicked.connect(self.reject)
-        hdr.addWidget(close_btn, 0, QtCore.Qt.AlignTop)
+        hdr.addWidget(close_btn, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         cl.addLayout(hdr)
 
         # ── Divider ──
         cl.addSpacing(14)
         line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.HLine)
+        line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         line.setStyleSheet("background-color: #e7ded2; max-height: 1px; border: none;")
         cl.addWidget(line)
         cl.addSpacing(16)
@@ -856,12 +1016,12 @@ class ThemedDialog(QtWidgets.QDialog):
 
     # Drag-to-move (frameless window has no native title bar)
     def mousePressEvent(self, e):
-        if e.button() == QtCore.Qt.LeftButton:
+        if e.button() == QtCore.Qt.MouseButton.LeftButton:
             self._drag_pos = e.globalPos() - self.frameGeometry().topLeft()
             e.accept()
 
     def mouseMoveEvent(self, e):
-        if self._drag_pos is not None and (e.buttons() & QtCore.Qt.LeftButton):
+        if self._drag_pos is not None and (e.buttons() & QtCore.Qt.MouseButton.LeftButton):
             self.move(e.globalPos() - self._drag_pos)
             e.accept()
 
@@ -887,8 +1047,8 @@ class MenuRow(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         h = QtWidgets.QHBoxLayout(self)
         h.setContentsMargins(12, 8, 12, 8)
         h.setSpacing(8)
@@ -929,7 +1089,7 @@ class MenuRow(QtWidgets.QWidget):
         super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e):
-        if e.button() == QtCore.Qt.LeftButton and self.rect().contains(e.pos()):
+        if e.button() == QtCore.Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
             self.clicked.emit()
         super().mouseReleaseEvent(e)
 
@@ -951,10 +1111,10 @@ class ToggleSwitch(QtWidgets.QCheckBox):
     def paintEvent(self, e):
         from qgis.PyQt.QtGui import QPainter
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = 46, 24
         y = (self.height() - h) // 2
-        p.setPen(QtCore.Qt.NoPen)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
         p.setBrush(QColor("#ea580c") if self.isChecked() else QColor("#d6cfca"))
         p.drawRoundedRect(QtCore.QRectF(0, y, w, h), h / 2.0, h / 2.0)
         d = h - 6
@@ -963,7 +1123,7 @@ class ToggleSwitch(QtWidgets.QCheckBox):
         p.drawEllipse(QtCore.QRectF(kx, y + 3, d, d))
         p.setPen(QColor("#1a1612"))
         p.drawText(QtCore.QRectF(w + 10, 0, self.width() - w - 10, self.height()),
-                   QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, self.text())
+                   QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft, self.text())
         p.end()
 
 
@@ -990,17 +1150,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._load_header_logo()
         self._wrap_content_scrollable()   # let the dialog fit small/scaled screens
 
-        if not RASTERIO_AVAILABLE:
-            QtWidgets.QMessageBox.warning(
-                self, "Missing dependency: rasterio",
-                "The 'rasterio' Python package is required for georeferencing and "
-                "report output, but it isn't installed in QGIS's Python.\n\n"
-                "Install it (see INSTALL.md), then restart QGIS. From "
-                "Plugins → Python Console:\n\n"
-                "    import subprocess, sys\n"
-                "    subprocess.check_call([sys.executable, '-m', 'pip', "
-                "'install', 'rasterio'])",
-            )
+        # No dependency warning here any more. The plugin used to open with a
+        # modal telling the user to pip-install rasterio, because metadata
+        # extraction needed it. It now reads metadata through GDAL, which ships
+        # with QGIS, so there is nothing for the user to install and nothing to
+        # warn about. A blocking dialog in a constructor was also its own
+        # problem: under an offscreen or automated QGIS it never returns.
 
         self.iface = iface
         self.selected_file: str | None = None
@@ -1074,7 +1229,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             return
         pixmap = QPixmap(logo_path)
         if not pixmap.isNull():
-            scaled = pixmap.scaledToHeight(24, QtCore.Qt.SmoothTransformation)
+            scaled = pixmap.scaledToHeight(24, QtCore.Qt.TransformationMode.SmoothTransformation)
             self.label_aive_logo.setPixmap(scaled)
             self.label_aive_logo.setFixedSize(scaled.width(), 24)
 
@@ -1130,13 +1285,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             scroll = QtWidgets.QScrollArea()
             scroll.setObjectName("content_scroll")
             scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-            scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             # AlwaysOff prevents Windows from reserving a ~17px gutter on the right
             # even when the scrollbar isn't visible — that gutter was pushing all
             # page content left of center. Pages that need scroll (setup with many
             # fields) still scroll; the bar just overlays instead of shifting content.
-            scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             scroll.setStyleSheet(
                 "QScrollArea#content_scroll { border: none; background: transparent; }")
             # Collapse the (always-off) vertical scrollbar to 0px so Windows reserves
@@ -1150,7 +1305,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # viewport width — without this, Windows may leave it at its .ui
             # minimumWidth, causing content to appear shifted to the right.
             self.stacked_pages.setSizePolicy(
-                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+                QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
             scroll.setWidget(self.stacked_pages)   # reparents; self.<name> access unchanged
             lay.insertWidget(idx, scroll)
         except Exception as e:
@@ -1206,7 +1361,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self.label_drop_zone.mousePressEvent = lambda _e: self.browse_file()
         if hasattr(self, "frame_drop_zone"):
             self.frame_drop_zone.mousePressEvent = lambda _e: self.browse_file()
-            self.frame_drop_zone.setAttribute(QtCore.Qt.WA_Hover, True)
+            self.frame_drop_zone.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
         self.btn_next_setup.clicked.connect(self._go_to_processing)
         self.btn_next_setup.setEnabled(False)   # disabled until a file is selected
         self.btn_logout_setup.clicked.connect(self._handle_logout)
@@ -1346,10 +1501,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     self._save_remembered_token()
                 else:
                     self._clear_remembered_token()
-                QtCore.QMetaObject.invokeMethod(self, "_on_signin_success", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signin_success", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, email), QtCore.Q_ARG(bool, email_verified))
             elif response.status_code == 401:
-                QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, "Incorrect email or password."))
             elif response.status_code == 403:
                 # 403 carries TWO different meanings on this endpoint. Assuming
@@ -1364,24 +1519,24 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     _code = ""
                 if _code == "COUNTRY_NOT_SUPPORTED":
                     QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, server_message(
                             response, "ATLAS-GEO is not available in your region yet.")))
                 else:
                     QtCore.QMetaObject.invokeMethod(self, "_on_email_not_verified",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, email))
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, email))
             else:
                 try:
                     detail = server_message(response, "Sign-in failed. Check your details and try again.")
                 except Exception:
                     detail = response.text
-                QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, f"Sign-in failed: {detail}"))
         except requests.ConnectionError:
-            QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Can't connect. Check your internet and try again."))
         except requests.Timeout:
-            QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Request timed out. Try again."))
 
     @QtCore.pyqtSlot(str, bool)
@@ -1392,7 +1547,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self.label_signin_error.setText("")
         self.label_signin_error.hide()
         self.iface.messageBar().pushMessage(
-            "ATLAS", f"Welcome, {email.split('@')[0]}!", level=0, duration=3
+            "ATLAS", f"Welcome, {email.split('@')[0]}!",
+            level=Qgis.MessageLevel.Info, duration=3
         )
         self._clear_session_state()   # ensure a clean slate for THIS user (no carry-over)
         self._build_profile_menu()    # one-time: profile dropdown (declutters header)
@@ -1448,7 +1604,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
             self.btn_view_plans = QtWidgets.QPushButton("View Plans")
             self.btn_view_plans.setMinimumHeight(34)
-            self.btn_view_plans.setCursor(QtCore.Qt.PointingHandCursor)
+            self.btn_view_plans.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             self.btn_view_plans.setStyleSheet(
                 "QPushButton {"
                 "  background-color: #ffffff;"
@@ -1465,7 +1621,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
             self.btn_buy_tokens = QtWidgets.QPushButton("＋  Buy Credits")
             self.btn_buy_tokens.setMinimumHeight(34)
-            self.btn_buy_tokens.setCursor(QtCore.Qt.PointingHandCursor)
+            self.btn_buy_tokens.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             self.btn_buy_tokens.setStyleSheet(
                 "QPushButton {"
                 "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
@@ -1561,7 +1717,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         header builds its own equivalent in _build_profile_menu)."""
         menu = QtWidgets.QMenu(self)
         try:
-            menu.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint, True)
+            menu.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
         except (AttributeError, TypeError) as exc:
             _log_nonfatal("menu drop shadow not disabled", exc, once=True)
         menu.setStyleSheet(
@@ -1602,7 +1758,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         menu.addAction("Log out").triggered.connect(self._handle_logout)
 
         chip = QtWidgets.QPushButton("🪙  …")
-        chip.setCursor(QtCore.Qt.PointingHandCursor)
+        chip.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         chip.setToolTip("View plans & buy credits" if SHOW_PAYG else "View your plan")
         chip.setStyleSheet(
             "QPushButton { background:#fff4ed; color:#9a3412; border:1px solid #fed7aa;"
@@ -1615,10 +1771,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         prof = QtWidgets.QToolButton()
         prof.setIcon(QIcon(self._avatar_pixmap((self.current_user_email or "U")[0])))
         prof.setIconSize(QtCore.QSize(22, 22))
-        prof.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        prof.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         prof.setText(f"{who}  ▾")
-        prof.setCursor(QtCore.Qt.PointingHandCursor)
-        prof.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        prof.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        prof.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         prof.setMenu(menu)
         prof.setStyleSheet(
             "QToolButton { background:#ffffff; border:1px solid #e2ddd8; border-radius:16px;"
@@ -1658,7 +1814,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if not renderer.isValid():
             raise ValueError(f"SVG failed to load for icon '{name}'")
         pm = QPixmap(size, size)
-        pm.fill(QtCore.Qt.transparent)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
         p = QPainter(pm)
         renderer.render(p)
         p.end()
@@ -1668,16 +1824,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         """A small circular orange avatar with a white initial (profile button icon)."""
         from qgis.PyQt.QtGui import QPixmap, QPainter, QFont
         pm = QPixmap(size, size)
-        pm.fill(QtCore.Qt.transparent)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
         p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.setPen(QtCore.Qt.NoPen)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
         p.setBrush(QColor("#ea580c"))
         p.drawEllipse(0, 0, size, size)
         p.setPen(QColor("#ffffff"))
         f = QFont(); f.setBold(True); f.setPointSize(max(7, int(size * 0.42)))
         p.setFont(f)
-        p.drawText(pm.rect(), QtCore.Qt.AlignCenter, (initial or "U")[:1].upper())
+        p.drawText(pm.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, (initial or "U")[:1].upper())
         p.end()
         return pm
 
@@ -1711,7 +1867,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             gr.setTitle("NEXT ACTIONS")
             f = gr.font(); f.setBold(True); f.setPointSize(8)
             try:
-                f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+                f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
             except (AttributeError, TypeError) as exc:
                 _log_nonfatal("letter spacing not applied", exc, once=True)
             gr.setFont(f)
@@ -1932,7 +2088,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 for i in range(row.count()):
                     row.setStretch(i, 1)
             for t in tiles:
-                t.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+                t.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
             tallest = max(t.sizeHint().height() for t in tiles)
             for t in tiles:
                 t.setMinimumHeight(tallest)
@@ -2001,7 +2157,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if bu is not None:
             # Inline text link (sits next to the prompt, centered under Sign In) —
             # not a second competing button.
-            bu.setCursor(QtCore.Qt.PointingHandCursor)
+            bu.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             bu.setStyleSheet(
                 "QPushButton { background:transparent; color:#ea580c; border:none;"
                 "  font-size:11px; font-weight:700; padding:2px; }"
@@ -2046,7 +2202,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 vlay.setContentsMargins(32, 12, 16, 12)
                 for i in range(vlay.count() - 1, -1, -1):
                     sp = vlay.itemAt(i).spacerItem()
-                    if sp is not None and (sp.expandingDirections() & QtCore.Qt.Vertical):
+                    if sp is not None and (sp.expandingDirections() & QtCore.Qt.Orientation.Vertical):
                         vlay.takeAt(i)
                 vlay.insertStretch(0, 1)
                 vlay.addStretch(1)
@@ -2127,21 +2283,21 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # setItemView + the AA_ hint below give us.
             cc.setMaxVisibleItems(12)
             cc.setView(QtWidgets.QListView())
-            cc.view().setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-            cc.view().setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            cc.view().setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            cc.view().setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             # Uniform row heights let the view size itself from maxVisibleItems
             # instead of measuring all 250 rows.
             cc.view().setUniformItemSizes(True)
-            cc.view().setTextElideMode(QtCore.Qt.ElideRight)
+            cc.view().setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
 
             # Type-to-find over 250 entries. Without a completer the only way to
             # reach Zimbabwe is to scroll the whole list.
-            cc.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+            cc.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
             _comp = QtWidgets.QCompleter(
                 [cc.itemText(i) for i in range(cc.count())], cc)
-            _comp.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
-            _comp.setFilterMode(QtCore.Qt.MatchContains)
-            _comp.setCompletionMode(QtWidgets.QCompleter.PopupCompletion)
+            _comp.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
+            _comp.setFilterMode(QtCore.Qt.MatchFlag.MatchContains)
+            _comp.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
             cc.setCompleter(_comp)
             cc.currentIndexChanged.connect(self._validate_signup_form)
 
@@ -2171,7 +2327,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # ── Real-time email validity: a ✓/✕ icon inside the email field's trailing edge ──
         em = getattr(self, "input_signup_email", None)
         if em is not None and getattr(self, "_email_status_action", None) is None:
-            act = em.addAction(self._mk_status_icon(True), QtWidgets.QLineEdit.TrailingPosition)
+            act = em.addAction(self._mk_status_icon(True), QtWidgets.QLineEdit.ActionPosition.TrailingPosition)
             act.setVisible(False)   # hidden until the user types something
             self._email_status_action = act
 
@@ -2186,7 +2342,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             bar.setFixedHeight(5)
             lab = QtWidgets.QLabel("")
             lab.setMinimumWidth(46)
-            lab.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            lab.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             mh.addWidget(bar, 1); mh.addWidget(lab)
             self._pw_strength_bar = bar
             self._pw_strength_label = lab
@@ -2217,7 +2373,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             lbl = QtWidgets.QLabel(
                 'I agree to the <a href="#terms">Terms of Service</a> and '
                 'acknowledge the <a href="#privacy">Privacy Policy</a>.')
-            lbl.setTextFormat(QtCore.Qt.RichText)
+            lbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
             lbl.setWordWrap(True)
             lbl.setStyleSheet(
                 "font-size:11px; color:#57534e; background:transparent;"
@@ -2227,7 +2383,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             top = QtWidgets.QHBoxLayout()
             top.setContentsMargins(0, 0, 0, 0)
             top.setSpacing(8)
-            top.addWidget(chk, 0, QtCore.Qt.AlignTop)
+            top.addWidget(chk, 0, QtCore.Qt.AlignmentFlag.AlignTop)
             top.addWidget(lbl, 1)
             rv.addLayout(top)
 
@@ -2239,7 +2395,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             rv.addWidget(status)
 
             retry = QtWidgets.QPushButton("Retry")
-            retry.setCursor(QtCore.Qt.PointingHandCursor)
+            retry.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             retry.setStyleSheet(
                 "QPushButton { background:transparent; color:#ea580c;"
                 "  border:none; font-size:11px; font-weight:700;"
@@ -2309,13 +2465,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         """Small ✓ (green) / ✕ (red) glyph icon for the inline email-validity marker."""
         from qgis.PyQt.QtGui import QPixmap, QPainter, QFont, QIcon
         pm = QPixmap(size, size)
-        pm.fill(QtCore.Qt.transparent)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
         p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setPen(QColor("#16a34a") if ok else QColor("#dc2626"))
         f = QFont(); f.setBold(True); f.setPointSize(int(size * 0.62))
         p.setFont(f)
-        p.drawText(pm.rect(), QtCore.Qt.AlignCenter, "✓" if ok else "✕")
+        p.drawText(pm.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "✓" if ok else "✕")
         p.end()
         return QIcon(pm)
 
@@ -2397,7 +2553,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception:
                 cfg = ""
             QtCore.QMetaObject.invokeMethod(
-                self, "_apply_legal_config", QtCore.Qt.QueuedConnection,
+                self, "_apply_legal_config", QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, cfg))
         threading.Thread(target=_work, daemon=True).start()
 
@@ -2577,7 +2733,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         code_in = getattr(self, "input_reset_code", None)
         if form is not None and code_in is not None and getattr(self, "_reset_resend_btn", None) is None:
             resend = QtWidgets.QPushButton("Resend code")
-            resend.setCursor(QtCore.Qt.PointingHandCursor)
+            resend.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             resend.setStyleSheet("QPushButton { background:transparent; color:#ea580c; border:none;"
                                  "  font-size:11px; font-weight:600; text-align:left; padding:2px 0; }"
                                  "QPushButton:hover { color:#c2410c; }"
@@ -2595,7 +2751,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             bar = QtWidgets.QProgressBar(); bar.setRange(0, 100); bar.setValue(0); bar.setTextVisible(False)
             bar.setFixedHeight(5)
             lab = QtWidgets.QLabel(""); lab.setMinimumWidth(46)
-            lab.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            lab.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             mh.addWidget(bar, 1); mh.addWidget(lab)
             self._reset_strength_bar = bar
             self._reset_strength_label = lab
@@ -2792,7 +2948,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # Industrial: sharp 2px corners, thin #d1d5db border, and drop the fluffy
             # OS shadow for a tighter look.
             try:
-                menu.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint, True)
+                menu.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
             except (AttributeError, TypeError) as exc:
                 _log_nonfatal("menu drop shadow not disabled", exc, once=True)
             menu.setStyleSheet(
@@ -2842,7 +2998,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # Glanceable balance chip in the header (discoverability): always visible,
             # click -> View Plans. Updated by _set_balance_ui.
             self.label_token_balance = QtWidgets.QPushButton("🪙  …")
-            self.label_token_balance.setCursor(QtCore.Qt.PointingHandCursor)
+            self.label_token_balance.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             self.label_token_balance.setToolTip(
                 "View plans & buy credits" if SHOW_PAYG else "View your plan")
             self.label_token_balance.setStyleSheet(
@@ -2856,10 +3012,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             prof = QtWidgets.QToolButton()
             prof.setIcon(QIcon(self._avatar_pixmap((self.current_user_email or "U")[0])))
             prof.setIconSize(QtCore.QSize(22, 22))
-            prof.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            prof.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             prof.setText(f"{who}  ▾")
-            prof.setCursor(QtCore.Qt.PointingHandCursor)
-            prof.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+            prof.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            prof.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
             prof.setMenu(menu)
             prof.setStyleSheet(
                 "QToolButton { background:#ffffff; border:1px solid #e2ddd8; border-radius:16px;"
@@ -2914,9 +3070,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             tgl = QtWidgets.QToolButton()
             tgl.setCheckable(True)
             tgl.setChecked(False)
-            tgl.setCursor(QtCore.Qt.PointingHandCursor)
-            tgl.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-            tgl.setArrowType(QtCore.Qt.RightArrow)
+            tgl.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            tgl.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            tgl.setArrowType(QtCore.Qt.ArrowType.RightArrow)
             tgl.setText("Recent uploads")
             tgl.setStyleSheet(
                 "QToolButton { border:none; background:transparent; padding:6px 0;"
@@ -2925,7 +3081,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
             def _toggle_recent(checked):
                 gb.setVisible(checked)
-                tgl.setArrowType(QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow)
+                tgl.setArrowType(QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow)
             tgl.toggled.connect(_toggle_recent)
 
             gb.setTitle("")          # drop the tab-style title; the toggle is the header
@@ -2939,7 +3095,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             def _eng_font(widget, pt=8):
                 f = widget.font(); f.setBold(True); f.setPointSize(pt)
                 try:
-                    f.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+                    f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
                 except (AttributeError, TypeError) as exc:
                     _log_nonfatal("letter spacing not applied", exc, once=True)
                 widget.setFont(f)
@@ -2985,9 +3141,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         req_tgl = QtWidgets.QToolButton()
                         req_tgl.setCheckable(True)
                         req_tgl.setChecked(False)
-                        req_tgl.setCursor(QtCore.Qt.PointingHandCursor)
-                        req_tgl.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-                        req_tgl.setArrowType(QtCore.Qt.RightArrow)
+                        req_tgl.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                        req_tgl.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                        req_tgl.setArrowType(QtCore.Qt.ArrowType.RightArrow)
                         req_tgl.setText("Imagery requirements")
                         req_tgl.setToolTip(
                             "What your images need for accurate georeferencing")
@@ -3007,7 +3163,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         rp = QtWidgets.QVBoxLayout(req_panel)
                         rp.setContentsMargins(14, 12, 14, 12)
                         req_body = QtWidgets.QLabel(self._imagery_requirements_html())
-                        req_body.setTextFormat(QtCore.Qt.RichText)
+                        req_body.setTextFormat(QtCore.Qt.TextFormat.RichText)
                         req_body.setWordWrap(True)
                         req_body.setStyleSheet(
                             "font-size:11px; color:#57534e; background:transparent;")
@@ -3017,8 +3173,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
                         def _toggle_req(checked, _p=req_panel, _t=req_tgl):
                             _p.setVisible(checked)
-                            _t.setArrowType(QtCore.Qt.DownArrow if checked
-                                            else QtCore.Qt.RightArrow)
+                            _t.setArrowType(QtCore.Qt.ArrowType.DownArrow if checked
+                                            else QtCore.Qt.ArrowType.RightArrow)
                         req_tgl.toggled.connect(_toggle_req)
                         self._req_toggle = req_tgl
 
@@ -3046,7 +3202,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             combo = getattr(self, "combo_basemap_setup", None)
             if combo is not None:
                 combo.setMinimumHeight(38)
-                combo.setCursor(QtCore.Qt.PointingHandCursor)
+                combo.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
                 lview = QtWidgets.QListView()
                 lview.setSpacing(2)
                 combo.setView(lview)
@@ -3109,7 +3265,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 for gbn in ("groupbox_mission_name", "groupbox_base_map"):
                     g = getattr(self, gbn, None)
                     if g is not None:
-                        mb.setAlignment(g, QtCore.Qt.AlignTop)
+                        mb.setAlignment(g, QtCore.Qt.AlignmentFlag.AlignTop)
 
             self._setup_laid_out = True
             self._pin_setup_cta()
@@ -3352,14 +3508,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 if over or pct >= 90.0:
                     label = f"{label} · {used_disp}/{quota_gb:.0f} GB" + (" ⚠" if over else "")
             QtCore.QMetaObject.invokeMethod(self, "_set_balance_ui",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
             QtCore.QMetaObject.invokeMethod(self, "_set_storage_ui",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, storage_line),
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, storage_line),
                 QtCore.Q_ARG(bool, storage_over))
             # Show/hide the on-demand "Move my files to the team" menu item — visible
             # whenever an org member still has un-migrated personal files.
             QtCore.QMetaObject.invokeMethod(self, "_set_migration_ui",
-                QtCore.Qt.QueuedConnection,
+                QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(bool, bool(bal and bal.get("org_has_personal_files"))))
             # Trial-request state, but only for PAYG users — anyone on a plan can't
             # receive a trial, so the call would be wasted on every refresh.
@@ -3367,13 +3523,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             trial_state = (self._get_trial_status()
                            if str(tier).lower() == "payg" else "none")
             QtCore.QMetaObject.invokeMethod(self, "_set_trial_request_ui",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, trial_state))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, trial_state))
             # Newly-seated org member with pre-existing files → offer the one-time
             # migrate-or-keep choice (backend flag clears once they decide). Older
             # backends omit the field, so this simply never fires there.
             if bal and bal.get("org_migration_pending"):
                 QtCore.QMetaObject.invokeMethod(self, "_prompt_file_migration",
-                    QtCore.Qt.QueuedConnection,
+                    QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, bal.get("org_name") or "your team"))
         threading.Thread(target=_work, daemon=True).start()
 
@@ -3397,7 +3553,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             "for 1 year (Enterprise retention).<br>"
             "• <b>Keep them personal</b>: they stay yours and keep your current retention.<br><br>"
             "Either way, anything you upload <b>from now on</b> is shared with the team.")
-        msg.setTextFormat(QtCore.Qt.RichText)
+        msg.setTextFormat(QtCore.Qt.TextFormat.RichText)
         msg.setWordWrap(True)
         msg.setMinimumWidth(340)
         msg.setStyleSheet("font-size: 13px; color: #57534e; background: transparent; border: none;")
@@ -3416,7 +3572,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
         if result["decision"]:
             self._submit_migration_decision(result["decision"])
 
@@ -3430,14 +3586,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 if resp.status_code == 200:
                     n = int(resp.json().get("migrated_files") or 0)
                     QtCore.QMetaObject.invokeMethod(self, "_migration_done",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, decision), QtCore.Q_ARG(int, n))
                     return
                 msg = f"Could not save your choice (HTTP {resp.status_code})."
             except Exception as e:
                 msg = f"Couldn't save your choice: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     @QtCore.pyqtSlot(str, int)
@@ -3497,7 +3653,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         continue
                     label, tip = self._format_balance(cur)
                     QtCore.QMetaObject.invokeMethod(self, "_set_balance_ui",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
                     if base_total is not None and _total(cur) != base_total:
                         break
             finally:
@@ -3508,7 +3664,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         """Refresh the balance whenever the plugin window regains focus — e.g. the
         user returns from the Stripe Checkout browser tab after paying."""
         super().changeEvent(e)
-        if e.type() == QtCore.QEvent.ActivationChange and self.isActiveWindow():
+        if e.type() == QtCore.QEvent.Type.ActivationChange and self.isActiveWindow():
             if getattr(self, "_billing_strip_built", False):
                 self._refresh_balance()
 
@@ -3664,7 +3820,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 if resp.status_code == 200:
                     eff = resp.json().get("effective", "")
                     QtCore.QMetaObject.invokeMethod(self, "_switch_done",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, disp),
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, disp),
                         QtCore.Q_ARG(str, eff), QtCore.Q_ARG(str, billing))
                     return
                 try:
@@ -3676,7 +3832,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception as e:
                 msg = f"Switch error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     @QtCore.pyqtSlot(str, str, str)
@@ -3710,7 +3866,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 if resp.status_code == 200:
                     when = resp.json().get("cancel_at") or ""
                     QtCore.QMetaObject.invokeMethod(self, "_cancel_done",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, when))
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, when))
                     return
                 try:
                     detail = resp.json().get("detail")
@@ -3721,7 +3877,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception as e:
                 msg = f"Cancel error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     @QtCore.pyqtSlot(str)
@@ -3741,7 +3897,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 resp = self._authed_request("POST", SUB_REACTIVATE_URL, json={}, timeout=25)
                 if resp.status_code == 200:
                     QtCore.QMetaObject.invokeMethod(self, "_reactivate_done",
-                        QtCore.Qt.QueuedConnection)
+                        QtCore.Qt.ConnectionType.QueuedConnection)
                     return
                 try:
                     detail = resp.json().get("detail")
@@ -3752,7 +3908,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception as e:
                 msg = f"Reactivate error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     @QtCore.pyqtSlot()
@@ -3771,7 +3927,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 resp = self._authed_request("POST", SUB_CANCEL_SWITCH_URL, json={}, timeout=25)
                 if resp.status_code == 200:
                     QtCore.QMetaObject.invokeMethod(self, "_cancel_switch_done",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, keep_disp))
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, keep_disp))
                     return
                 try:
                     detail = resp.json().get("detail")
@@ -3782,7 +3938,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception as e:
                 msg = f"Cancel-switch error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     @QtCore.pyqtSlot(str)
@@ -3803,7 +3959,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     checkout_url = resp.json().get("checkout_url")
                     if checkout_url:
                         QtCore.QMetaObject.invokeMethod(self, "_open_browser",
-                            QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, checkout_url))
+                            QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, checkout_url))
                         return
                 # Surface the server's explanation (e.g. 409 "already subscribed").
                 try:
@@ -3814,7 +3970,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception as e:
                 msg = f"Checkout error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     def _themed_notice(self, title, message, icon=None, accent="orange", button="OK",
@@ -3840,12 +3996,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if icon:
             ic = QtWidgets.QLabel(icon)
             ic.setFixedSize(48, 48)
-            ic.setAlignment(QtCore.Qt.AlignCenter)
+            ic.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             ic.setStyleSheet(
                 f"font-size: 22px; font-weight: 700; color: {mark};"
                 f" background-color: {badge[0]};"
                 f" border: 1px solid {badge[1]}; border-radius: 24px;")
-            row.addWidget(ic, 0, QtCore.Qt.AlignTop)
+            row.addWidget(ic, 0, QtCore.Qt.AlignmentFlag.AlignTop)
 
         msg = QtWidgets.QLabel(message)
         msg.setWordWrap(True)
@@ -3863,7 +4019,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
 
     @QtCore.pyqtSlot(str)
     def _open_browser(self, url: str):
@@ -3894,18 +4050,18 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     portal_url = resp.json().get("portal_url")
                     if portal_url:
                         QtCore.QMetaObject.invokeMethod(self, "_open_browser",
-                            QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, portal_url))
+                            QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, portal_url))
                         return
                 elif resp.status_code == 404:
                     msg = "No billing account yet. Buy credits or subscribe first."
                     QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                        QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                        QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
                     return
                 msg = f"Could not open billing portal (HTTP {resp.status_code})."
             except Exception as e:
                 msg = f"Portal error: {e}"
             QtCore.QMetaObject.invokeMethod(self, "_checkout_failed",
-                QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg))
+                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, msg))
         threading.Thread(target=_work, daemon=True).start()
 
     # ── Themed popup helpers ────────────────────────────────────────────
@@ -3913,7 +4069,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         """Return a QPushButton styled to match the plugin's design language."""
         btn = QtWidgets.QPushButton(text)
         btn.setMinimumHeight(min_height)
-        btn.setCursor(QtCore.Qt.PointingHandCursor)
+        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         if primary:
             top, bot, edge, press = {
                 "orange": ("#f4691c", "#ea580c", "#c2410c", "#c2410c"),
@@ -3945,7 +4101,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     def _plan_card(self, name, tagline, price, price_suffix, features, accent=False, badge=None):
         """Build a pricing tier card. Returns (frame, button_box_layout)."""
         frame = QtWidgets.QFrame()
-        frame.setAttribute(QtCore.Qt.WA_Hover, True)   # ensure :hover repaints reliably
+        frame.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)   # ensure :hover repaints reliably
         if accent:
             # Featured / current plan: keep the orange outline as its meaning-bearing
             # marker; hover only deepens the tint slightly (never changes the border).
@@ -3992,14 +4148,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # price row
         prow = QtWidgets.QHBoxLayout()
         prow.setSpacing(2)
-        prow.setAlignment(QtCore.Qt.AlignLeft)
+        prow.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         plbl = QtWidgets.QLabel(price)
         plbl.setStyleSheet("font-size: 26px; font-weight: 800; color: #1a1612;")
         prow.addWidget(plbl)
         if price_suffix:
             slbl = QtWidgets.QLabel(price_suffix)
             slbl.setStyleSheet("font-size: 12px; color: #78716c; padding-bottom: 4px;")
-            prow.addWidget(slbl, 0, QtCore.Qt.AlignBottom)
+            prow.addWidget(slbl, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
         v.addSpacing(6)
         v.addLayout(prow)
         v.addSpacing(8)
@@ -4041,7 +4197,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 lbl = QtWidgets.QLabel("✓  Your active plan")
                 lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #047857;")
-            lbl.setAlignment(QtCore.Qt.AlignCenter)
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             box.addWidget(lbl)
             # We own the lifecycle here (the Stripe portal can't cancel a schedule-
             # managed sub). Switching to OTHER tiers is on their cards; card + invoices
@@ -4061,7 +4217,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 keep.clicked.connect(lambda _c=False, d=cur_disp: (dlg.accept(), self._cancel_pending_switch(d)))
                 box.addWidget(keep)
                 canc = QtWidgets.QPushButton("Cancel subscription → Pay As You Go")
-                canc.setCursor(QtCore.Qt.PointingHandCursor)
+                canc.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
                 canc.setStyleSheet(
                     "QPushButton { background: transparent; color: #a8a29e; border: none;"
                     "  font-size: 11px; text-decoration: underline; padding: 2px; }"
@@ -4074,7 +4230,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # A faint gray text link, not a button, so it's hard to hit by
                 # accident but still reachable. Reveals on hover.
                 canc = QtWidgets.QPushButton("Cancel plan")
-                canc.setCursor(QtCore.Qt.PointingHandCursor)
+                canc.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
                 canc.setStyleSheet(
                     "QPushButton { background: transparent; color: #bcb3a7; border: none;"
                     "  font-size: 11px; padding: 2px; }"
@@ -4084,7 +4240,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 hint_txt = "Switch from another card; card & invoices in Manage billing."
             hint = QtWidgets.QLabel(hint_txt)
             hint.setStyleSheet("font-size: 10px; color: #a8a29e;")
-            hint.setAlignment(QtCore.Qt.AlignCenter)
+            hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             hint.setWordWrap(True)
             box.addWidget(hint)
         elif is_subscriber:
@@ -4099,12 +4255,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # the buttons as a reactivate-by-switch path.
                 lbl = QtWidgets.QLabel("Switch scheduled for next renewal")
                 lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #b45309;")
-                lbl.setAlignment(QtCore.Qt.AlignCenter)
+                lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                 lbl.setWordWrap(True)
                 box.addWidget(lbl)
                 hint = QtWidgets.QLabel("Manage it from your current plan card")
                 hint.setStyleSheet("font-size: 10px; color: #a8a29e;")
-                hint.setAlignment(QtCore.Qt.AlignCenter)
+                hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                 hint.setWordWrap(True)
                 box.addWidget(hint)
             else:
@@ -4119,7 +4275,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     # Plan is set to cancel — switching here un-cancels and moves you.
                     rhint = QtWidgets.QLabel("Switching also reactivates your plan")
                     rhint.setStyleSheet("font-size: 10px; color: #a8a29e;")
-                    rhint.setAlignment(QtCore.Qt.AlignCenter)
+                    rhint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                     rhint.setWordWrap(True)
                     box.addWidget(rhint)
         else:
@@ -4224,7 +4380,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if SHOW_PAYG or SHOW_SUBSCRIPTION_TIERS:
             foot = QtWidgets.QHBoxLayout()
             manage = QtWidgets.QPushButton("Manage billing && saved card")
-            manage.setCursor(QtCore.Qt.PointingHandCursor)
+            manage.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             manage.setStyleSheet(
                 "QPushButton { background: transparent; color: #ea580c; border: none;"
                 "  font-size: 12px; font-weight: 600; text-decoration: underline; padding: 4px; }"
@@ -4237,7 +4393,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
 
     @QtCore.pyqtSlot(str)
     def _on_email_not_verified(self, email: str):
@@ -4363,7 +4519,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 "client_version":  "atlas-geo-plugin/1.0",
             }, timeout=15)
             if response.status_code == 200:
-                QtCore.QMetaObject.invokeMethod(self, "_on_signup_success", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, email))
+                QtCore.QMetaObject.invokeMethod(self, "_on_signup_success",
+                                                QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(str, email))
                 return
             # BRANCH ON THE CODE, NOT THE STATUS. 409 already meant "this email
             # is already registered" here long before the legal check existed,
@@ -4389,27 +4547,27 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # about regional availability into what looks like an error the
                 # user did something to cause.
                 QtCore.QMetaObject.invokeMethod(self, "_on_country_not_supported",
-                    QtCore.Qt.QueuedConnection,
+                    QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, detail.get("message") or
                                  "ATLAS-GEO is not available in your region yet."))
             elif code == "LEGAL_VERSION_STALE":
                 QtCore.QMetaObject.invokeMethod(self, "_legal_versions_stale",
-                    QtCore.Qt.QueuedConnection, QtCore.Q_ARG(dict, detail))
+                    QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(dict, detail))
             elif code == "PLUGIN_LEGAL_UNSUPPORTED":
-                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, detail.get("message")
                                  or "Please update ATLAS-GEO to continue."))
             elif response.status_code == 409:
-                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, "This email is already registered. Sign in instead."))
             else:
-                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, f"Sign-up failed: {detail.get('message', '')}"))
         except requests.ConnectionError:
-            QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Can't connect. Check your internet and try again."))
         except requests.Timeout:
-            QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Request timed out. Try again."))
 
     @QtCore.pyqtSlot(str)
@@ -4505,7 +4663,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             msg, msg_type = "Request timed out. Try again.", "error"
         except Exception as e:
             msg, msg_type = f"Error: {str(e)}", "error"
-        QtCore.QMetaObject.invokeMethod(self, "_on_send_reset_code_done", QtCore.Qt.QueuedConnection,
+        QtCore.QMetaObject.invokeMethod(self, "_on_send_reset_code_done", QtCore.Qt.ConnectionType.QueuedConnection,
             QtCore.Q_ARG(str, msg), QtCore.Q_ARG(str, msg_type))
 
     @QtCore.pyqtSlot(str, str)
@@ -4558,12 +4716,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             response = requests.post(RESET_PASSWORD_URL, json={"email": email, "code": code, "new_password": password}, timeout=15)
             if response.status_code == 200:
-                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_success", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, email))
+                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_success",
+                                                QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(str, email))
             elif response.status_code == 400:
-                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed",
+                                                QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, "Invalid or expired code. Request a new one."))
             elif response.status_code == 404:
-                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed",
+                                                QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, "Email not found. Check your email address."))
             else:
                 try:
@@ -4571,13 +4733,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         response, "Could not reset your password. Check the code and try again.")
                 except Exception:
                     detail = response.text
-                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed", QtCore.Qt.QueuedConnection,
+                QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed",
+                                                QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, f"Reset failed: {detail}"))
         except requests.ConnectionError:
-            QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed",
+                                            QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Can't connect. Check your internet and try again."))
         except requests.Timeout:
-            QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed", QtCore.Qt.QueuedConnection,
+            QtCore.QMetaObject.invokeMethod(self, "_on_reset_password_failed",
+                                            QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, "Request timed out. Try again."))
 
     @QtCore.pyqtSlot(str)
@@ -4625,12 +4790,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if icon:
             ic = QtWidgets.QLabel(icon)
             ic.setFixedSize(48, 48)
-            ic.setAlignment(QtCore.Qt.AlignCenter)
+            ic.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             ic.setStyleSheet(
                 f"font-size: 22px; font-weight: 700; color: {mark};"
                 f" background-color: {badge[0]};"
                 f" border: 1px solid {badge[1]}; border-radius: 24px;")
-            row.addWidget(ic, 0, QtCore.Qt.AlignTop)
+            row.addWidget(ic, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         msg = QtWidgets.QLabel(message)
         msg.setWordWrap(True)
         msg.setMinimumWidth(280)
@@ -4650,7 +4815,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        return dlg.exec_() == QtWidgets.QDialog.Accepted
+        return dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
 
     def _clear_session_state(self):
         """Wipe ALL per-user, in-memory state so one account's data never leaks into
@@ -4758,13 +4923,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             self.refresh_token = None
             self.current_user_email = None
             self._clear_remembered_token()
-            QtCore.QMetaObject.invokeMethod(self, "_on_logout_complete", QtCore.Qt.QueuedConnection)
+            QtCore.QMetaObject.invokeMethod(self, "_on_logout_complete", QtCore.Qt.ConnectionType.QueuedConnection)
 
     @QtCore.pyqtSlot()
     def _on_logout_complete(self):
         self._clear_session_state()   # drop the previous user's uploads/jobs/results
         self._update_header_status()  # header chip -> back to version tag
-        self.iface.messageBar().pushMessage("ATLAS", "Logged out successfully.", level=0, duration=3)
+        self.iface.messageBar().pushMessage("ATLAS", "Logged out successfully.",
+                                            level=Qgis.MessageLevel.Info, duration=3)
         self._go_to_signin()
 
     # ─────────────────────────────────────────────────────────
@@ -4846,7 +5012,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         folder_btn.clicked.connect(lambda: (result.__setitem__("choice", "folder"), dlg.accept()))
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
 
         if result["choice"] == "files":
             self._browse_files()
@@ -5105,8 +5271,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         inner = QtWidgets.QWidget()
@@ -5752,7 +5918,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     if not img.isNull() and max(img.width(), img.height()) > UPLOAD_MAX_EDGE:
                         scaled = img.scaled(
                             UPLOAD_MAX_EDGE, UPLOAD_MAX_EDGE,
-                            QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                            QtCore.Qt.TransformationMode.SmoothTransformation)
                         fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="atlas_up_")
                         os.close(fd)
                         ok = scaled.save(tmp, "JPEG", UPLOAD_JPEG_QUALITY)
@@ -6048,7 +6215,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             self._submitted_jobs = dict(job_files)
             for fname in job_files.values():
                 QtCore.QMetaObject.invokeMethod(
-                    self, "_set_upload_status", QtCore.Qt.QueuedConnection,
+                    self, "_set_upload_status", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, fname), QtCore.Q_ARG(str, "Processing"))
 
             total_jobs = len(job_ids)
@@ -6162,7 +6329,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                             _log_nonfatal("result not saved to this computer",
                                           level=_LOG_WARNING)
                             QtCore.QMetaObject.invokeMethod(
-                                self, "_set_upload_status", QtCore.Qt.QueuedConnection,
+                                self, "_set_upload_status", QtCore.Qt.ConnectionType.QueuedConnection,
                                 QtCore.Q_ARG(str, job_files.get(jid, "")),
                                 QtCore.Q_ARG(str, "Not saved"))
                             # Resolved, not pending: the job is finished server-side.
@@ -6192,7 +6359,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         # perfect lock.
                         badge = "Low confidence" if quality == "low" else "Processed"
                         QtCore.QMetaObject.invokeMethod(
-                            self, "_set_upload_status", QtCore.Qt.QueuedConnection,
+                            self, "_set_upload_status", QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(str, job_files.get(jid, "")),
                             QtCore.Q_ARG(str, badge))
 
@@ -6219,7 +6386,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                             "billing": poll_data.get("billing"),
                         }
                         QtCore.QMetaObject.invokeMethod(
-                            self, "_set_upload_status", QtCore.Qt.QueuedConnection,
+                            self, "_set_upload_status", QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(str, job_files.get(jid, "")),
                             QtCore.Q_ARG(str, "Failed"))
                         pending.discard(jid)
@@ -6232,7 +6399,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 current_file = next(iter(job_files[j] for j in pending), "—") if pending \
                     else (list(job_files.values())[-1] if job_files else "—")
                 QtCore.QMetaObject.invokeMethod(
-                    self, "_update_processing_header", QtCore.Qt.QueuedConnection,
+                    self, "_update_processing_header", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, current_file),
                     QtCore.Q_ARG(int, n_done), QtCore.Q_ARG(int, total_jobs))
 
@@ -6244,7 +6411,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     "reason": "Timed out",
                 }
                 QtCore.QMetaObject.invokeMethod(
-                    self, "_set_upload_status", QtCore.Qt.QueuedConnection,
+                    self, "_set_upload_status", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, job_files.get(jid, "")),
                     QtCore.Q_ARG(str, "Failed"))
                 pending.discard(jid)
@@ -6351,9 +6518,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # GPSAltitudeRef 0 means above SEA LEVEL, 1 means below it. Neither is
         # above ground, which is why this branch reports gps_msl.
         try:
-            import rasterio
-            with rasterio.open(image_path) as src:
-                tags = src.tags()
+            if True:
+                tags = _image_tags(image_path)
                 alt_str = tags.get('EXIF_GPSAltitude', '')
                 if alt_str:
                     m = re.search(r'(\d+(?:\.\d+)?)', str(alt_str))
@@ -6375,11 +6541,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     def _extract_focal35_from_raw_xmp(self, image_path: str) -> float:
         """Extract FocalLengthIn35mmFilm from EXIF or XMP."""
         import re
-        # First try standard EXIF via rasterio
-        import rasterio
+        # First try standard EXIF, read through GDAL
         try:
-            with rasterio.open(image_path) as src:
-                tags = src.tags()
+            if True:
+                tags = _image_tags(image_path)
                 focal_str = tags.get('EXIF_FocalLengthIn35mmFilm', '')
                 if focal_str:
                     m = re.search(r'(\d+(?:\.\d+)?)', str(focal_str))
@@ -6423,7 +6588,6 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _extract_gps_from_image(self, image_path: str) -> tuple:
         import re
-        import rasterio
 
         def parse_dms(raw: str) -> float:
             nums = re.findall(r'[\d.]+', raw)
@@ -6434,8 +6598,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             raise ValueError(f"Cannot parse DMS: '{raw}'")
 
         try:
-            with rasterio.open(image_path) as src:
-                tags = src.tags()
+            if True:
+                tags = _image_tags(image_path)
 
                 # GPS from flat GDAL tags
                 lat_raw = tags.get("EXIF_GPSLatitude", "").strip()
@@ -6491,9 +6655,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         """
         import re
         try:
-            import rasterio
-            with rasterio.open(image_path) as src:
-                tags = src.tags()
+            tags = _image_tags(image_path)
             raw = tags.get("EXIF_GPSImgDirection", "")
             if not raw:
                 return None
@@ -6754,7 +6916,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         the map instead of dumping it at (0, 0).
         """
         if not os.path.exists(path):
-            self.iface.messageBar().pushMessage("ATLAS", f"Result file not found: {path}", level=2)
+            self.iface.messageBar().pushMessage("ATLAS", f"Result file not found: {path}",
+                                                level=Qgis.MessageLevel.Critical)
             return
         # Drop any layer still reading this path BEFORE we touch the file. Result
         # names are deterministic, so reprocessing the same image overwrites it
@@ -6762,15 +6925,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # rewrite outright, not merely leave QGIS with stale dimensions.
         self._drop_layers_for_path(path)
         try:
-            with rasterio.open(path) as src:
-                has_geo = (
-                    src.crs is not None and
-                    src.transform != rasterio.transform.IDENTITY
-                )
-                width  = src.width
-                height = src.height
-                count  = src.count
-                dtype  = src.dtypes[0]
+            info = _raster_info(path)
+            if info is None:
+                raise OSError("raster could not be opened")
+            has_geo, width, height, count, dtype = info
 
             if not has_geo:
                 import math
@@ -6780,39 +6938,28 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 west  = lon - (width  / 2) * deg_per_px_lon
                 north = lat + (height / 2) * deg_per_px_lat
+                south = north - height * deg_per_px_lat
+                east  = west + width * deg_per_px_lon
 
-                transform = from_bounds(
-                    west, north - height * deg_per_px_lat,
-                    west + width * deg_per_px_lon, north,
-                    width, height,
-                )
-                # The transform above is built in WGS84 degrees (deg_per_px,
-                # west/north are lon/lat), so the CRS MUST be EPSG:4326. Tagging
-                # it 3857 made QGIS read the degree coords as Web-Mercator metres
-                # and dumped the layer at ~(0,0) null island. QGIS reprojects
-                # 4326 -> the canvas CRS automatically.
-                crs = CRS.from_epsg(4326)
-
-                # Re-write the TIF in place with the new geotransform
-                with rasterio.open(path) as src:
-                    data = src.read()
-
-                profile = {
-                    "driver":    "GTiff",
-                    "height":    height,
-                    "width":     width,
-                    "count":     count,
-                    "dtype":     dtype,
-                    "crs":       crs,
-                    "transform": transform,
-                    "compress":  "lzw",
-                }
-                with rasterio.open(path, "w", **profile) as dst:
-                    dst.write(data)
+                # The bounds above are WGS84 degrees (deg_per_px, west/north are
+                # lon/lat), so the CRS MUST be EPSG:4326. Tagging it 3857 made
+                # QGIS read the degree coords as Web-Mercator metres and dumped
+                # the layer at ~(0,0) null island. QGIS reprojects 4326 -> the
+                # canvas CRS automatically.
+                #
+                # The header is updated IN PLACE. The previous code read every
+                # band into memory and wrote a whole new file purely to attach a
+                # geotransform, which copied the pixels for no reason and risked
+                # altering them. Georeferencing is header-only, so this writes
+                # only the header and the pixels are provably untouched.
+                if not _apply_geotransform_in_place(path, west, north, east,
+                                                    south, epsg=4326):
+                    raise OSError("could not attach georeferencing")
 
         except Exception as geo_err:
             self.iface.messageBar().pushMessage(
-                "ATLAS", f"Georeference step failed: {geo_err}", level=1, duration=5
+                "ATLAS", f"Georeference step failed: {geo_err}",
+                level=Qgis.MessageLevel.Warning, duration=5
             )
         # ── Load into QGIS ───────────────────────────────────
         # Distinct, identifiable name per image so a batch's layers are
@@ -6834,7 +6981,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             self.iface.zoomToActiveLayer()
             self.iface.mapCanvas().refresh()
         else:
-            self.iface.messageBar().pushMessage("ATLAS", "Invalid raster layer.", level=2)
+            self.iface.messageBar().pushMessage("ATLAS", "Invalid raster layer.",
+                                                level=Qgis.MessageLevel.Critical)
 
     # ─────────────────────────────────────────────────────────
     # PROGRESS / STATUS
@@ -6877,7 +7025,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         f = lbl.font()
         f.setBold(True)
         try:
-            f.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
+            f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
         except (AttributeError, TypeError) as exc:
             _log_nonfatal("letter spacing not applied", exc, once=True)
         lbl.setFont(f)
@@ -6899,9 +7047,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         r = QtWidgets.QLabel(right)
         # Monospace value, right-aligned -> tabular telemetry readout (QSS can't do
         # tabular-nums; a monospace QFont gives fixed-width digits).
-        mono = QFont("Roboto Mono"); mono.setStyleHint(QFont.Monospace); mono.setBold(True)
+        mono = QFont("Roboto Mono"); mono.setStyleHint(QFont.StyleHint.Monospace); mono.setBold(True)
         r.setFont(mono)
-        r.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        r.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         r.setStyleSheet(f"font-size: 11px; color: {right_color}; font-weight: bold;")
         hl.addWidget(l)
         hl.addStretch()
@@ -7002,8 +7150,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     two_col.setSpacing(18)
                     two_col.addWidget(gpv, 1)    # pipeline stepper (01-07) — left
                     two_col.addWidget(stats, 1)  # Completed / Timing (stacked) — right
-                    two_col.setAlignment(gpv, QtCore.Qt.AlignTop)
-                    two_col.setAlignment(stats, QtCore.Qt.AlignTop)
+                    two_col.setAlignment(gpv, QtCore.Qt.AlignmentFlag.AlignTop)
+                    two_col.setAlignment(stats, QtCore.Qt.AlignmentFlag.AlignTop)
                     vlp.insertLayout(gpv_idx, two_col)
         except Exception as e:
             print(f"processing two-column layout failed: {e}")
@@ -7012,7 +7160,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if ins is not None:
             ins.setStyleSheet("QFrame#groupbox_insights, QGroupBox#groupbox_insights {"
                               " background:#1b1b1f; border:1px solid #2a2a2f; border-radius:6px; }")
-        mono = QFont("Consolas"); mono.setStyleHint(QFont.Monospace)
+        mono = QFont("Consolas"); mono.setStyleHint(QFont.StyleHint.Monospace)
         for n, col in (("label_insight_quality", "#34d399"),   # status   green
                        ("label_insight_speed",   "#e5e7eb"),    # step     standard
                        ("label_insight_eta",     "#60a5fa")):   # eta      blue
@@ -7552,7 +7700,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             lbl.setStyleSheet("font-size: 10px; color: #78716c;")
             val = QtWidgets.QLabel(value)
             val.setStyleSheet("font-size: 11px; font-weight: 700; color: #1a1612;")
-            val.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            val.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             grid.addWidget(lbl, i, 0)
             grid.addWidget(val, i, 1)
 
@@ -7608,18 +7756,25 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         out = str(Path(paths[0]).parent / f"atlas_mosaic_{int(time.time())}.tif")
-        self.setCursor(QtCore.Qt.WaitCursor)
+        self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
         try:
+            # ⚠️ SCOPED, not global. This used to call gdal.UseExceptions(),
+            # which is process-wide and permanent: from the first mosaic export
+            # onwards, every other QGIS plugin and QGIS itself saw GDAL raising
+            # where it previously returned None. Exceptions are genuinely wanted
+            # HERE, so gdal.Warp reports why it failed instead of yielding None,
+            # but that preference belongs to this block alone. ExceptionMgr
+            # restores the previous mode on exit.
             from osgeo import gdal
-            gdal.UseExceptions()
-            opts = gdal.WarpOptions(
-                format="GTiff",
-                srcNodata="0 0 0", dstNodata="0 0 0",
-                creationOptions=["COMPRESS=LZW", "TILED=YES"],
-                multithread=True,
-            )
-            ds = gdal.Warp(out, paths, options=opts)
-            ds = None   # flush + close
+            with gdal.ExceptionMgr(useExceptions=True):
+                opts = gdal.WarpOptions(
+                    format="GTiff",
+                    srcNodata="0 0 0", dstNodata="0 0 0",
+                    creationOptions=["COMPRESS=LZW", "TILED=YES"],
+                    multithread=True,
+                )
+                ds = gdal.Warp(out, paths, options=opts)
+                ds = None   # flush + close
         except Exception as e:
             self.unsetCursor()
             self._themed_notice("Merge failed", f"Could not build the mosaic:\n{e}",
@@ -8016,7 +8171,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
         if lat is None or lon is None:
             self.iface.messageBar().pushMessage(
-                "ATLAS", "No GPS coordinates available for this mission.", level=1, duration=4
+                "ATLAS", "No GPS coordinates available for this mission.",
+                level=Qgis.MessageLevel.Warning, duration=4
             )
             return
 
@@ -8110,7 +8266,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         msg = (f"Mission area: {n} georeferenced layer{'s' if n != 1 else ''}"
                if n else
                f"Mission area: {self._job_lat:.5f}°, {self._job_lon:.5f}°")
-        self.iface.messageBar().pushMessage("ATLAS", msg, level=0, duration=6)
+        self.iface.messageBar().pushMessage("ATLAS", msg,
+                                            level=Qgis.MessageLevel.Info, duration=6)
 
     def _combined_extent(self, layers, canvas_crs):
         """Union of every layer's extent, reprojected into the canvas CRS.
@@ -8494,6 +8651,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
         import csv
         from qgis.PyQt.QtGui import QTextDocument, QFont
+        from qgis.PyQt.QtGui import QPageSize, QPageLayout
+        from qgis.PyQt.QtCore import QMarginsF
         from qgis.PyQt.QtPrintSupport import QPrinter
 
         rows = self._collect_report_rows()
@@ -8533,14 +8692,31 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             # ── PDF ──
             pdf_path = save_path if save_path.lower().endswith(".pdf") else save_path + ".pdf"
-            printer = QPrinter(QPrinter.HighResolution)
-            printer.setOutputFormat(QPrinter.PdfFormat)
+            # ⚠️ SCOPED enum spellings and the QPageLayout margin API, deliberately.
+            # Qt6 removed the unscoped names QPrinter.HighResolution, .PdfFormat,
+            # .A4 and .Millimeter outright, so the Qt5 spellings raise
+            # AttributeError on QGIS 4 and this whole export failed with a
+            # misleading "Could not write report".
+            #
+            # The margins line is NOT merely a rename. The signatures do not
+            # overlap at all:
+            #   Qt5 QPrinter.setPageMargins(left, top, right, bottom, unit)
+            #   Qt6 QPrinter.setPageMargins(QMarginsF, QPageLayout.Unit)
+            # There is no call to setPageMargins that both accept. Going through
+            # QPageLayout works identically on Qt 5.15 and Qt 6.9 and yields the
+            # same A4 page with 14 mm margins on both, so it is used instead of
+            # branching on the Qt version.
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(pdf_path)
-            printer.setPageSize(QPrinter.A4)
+            printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
             try:
-                printer.setPageMargins(14, 14, 14, 14, QPrinter.Millimeter)
+                _layout = printer.pageLayout()
+                _layout.setUnits(QPageLayout.Unit.Millimeter)
+                _layout.setMargins(QMarginsF(14, 14, 14, 14))
+                printer.setPageLayout(_layout)
             except (AttributeError, TypeError) as exc:
-                # Older/newer signature: default margins are fine.
+                # Kept: default margins are still a usable report.
                 _log_nonfatal("PDF report margins not set, using defaults",
                               exc, once=True)
 
@@ -8553,11 +8729,20 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # half the page and squashes the header text into vertical columns.
             doc.setHtml(self._report_html(
                 rows, meta, logo_uri=self._logo_data_uri(), logo_h=42))
-            # NOTE: do NOT call doc.setPageSize() here. print_() binds the
+            # NOTE: do NOT call doc.setPageSize() here. printing binds the
             # document layout to the printer's DPI and page (A4 set above), so
             # pt-based fonts scale to physical size. Forcing a device-pixel page
             # size makes text microscopic on a giant page.
-            doc.print_(printer)
+            #
+            # ⚠️ `print`, not `print_`. PyQt5 exposed this as print_(), because
+            # `print` was a statement in Python 2; PyQt6 dropped the alias and
+            # exposes only print(). PyQt5 has BOTH, so the plain name is the one
+            # spelling that works on Qt5 and Qt6 alike.
+            #
+            # This one is invisible to a name-resolution audit: `doc` is a local,
+            # not a dotted Qt class path, so nothing static flagged it. It was
+            # caught by generating an actual PDF, which is why that test exists.
+            doc.print(printer)
 
             # ── CSV (same per-frame rows, machine-readable) ──
             csv_path = pdf_path[:-4] + ".csv"
@@ -8673,7 +8858,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                            "What your images need for accurate georeferencing")
 
         body = QtWidgets.QLabel(self._imagery_requirements_html())
-        body.setTextFormat(QtCore.Qt.RichText)
+        body.setTextFormat(QtCore.Qt.TextFormat.RichText)
         body.setWordWrap(True)
         body.setMinimumWidth(440)
         body.setStyleSheet(
@@ -8687,8 +8872,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # divider and footer, so it fits on a small or display-scaled monitor too.
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea { background:transparent; border:none; }"
             "QScrollBar:vertical { width:8px; background:transparent; margin:2px; }"
@@ -8722,11 +8907,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
 
     def _open_feedback_dialog(self):
         dlg = FeedbackDialog(user_email=self.current_user_email or "", parent=self)
-        dlg.exec_()
+        dlg.exec()
 
     def _get_trial_status(self):
         """Latest trial-request state ('none'|'pending'|'approved'|'rejected').
@@ -8829,7 +9014,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         foot = QtWidgets.QHBoxLayout()
         foot.addStretch(1)
         buy = QtWidgets.QPushButton("Buy Credits")
-        buy.setCursor(QtCore.Qt.PointingHandCursor)
+        buy.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         # Same link styling as the Plans dialog footer, so it is a familiar
         # affordance rather than a new one. Extra right padding keeps it from
         # crowding Close now that they sit side by side.
@@ -8853,7 +9038,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.body.addLayout(foot)
 
         dlg.adjustSize()
-        dlg.exec_()
+        dlg.exec()
         return result["choice"]
 
     def _open_trial_request_dialog(self):
@@ -8902,7 +9087,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                                  resubmit=resubmit,
                                  previous=getattr(self, "_trial_request_previous", None),
                                  parent=self)
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             # Reflect the new state immediately rather than waiting for the next
             # balance refresh, so the menu doesn't still read "Resubmit Trial Request".
             self._set_trial_request_ui("pending")

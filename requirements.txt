@@ -1,12 +1,19 @@
-# Python dependencies for the ATLAS Geo-Dock QGIS plugin.
+# Runtime requirements for the ATLAS Geo-Dock QGIS plugin.
 #
-# numpy and GDAL (osgeo) ship with QGIS, but rasterio and requests may not be
-# present in a stock QGIS install. Install these into QGIS's bundled Python
-# (see INSTALL.md). From the QGIS Python Console:
+# ⚠️ THE QGIS PLUGIN MANAGER DOES NOT READ THIS FILE. It installs no Python
+# packages; its dependency support covers other QGIS PLUGINS, not PyPI
+# distributions. This file is therefore documentation for developers, not an
+# install mechanism, and the plugin must run without anything here being acted
+# on.
 #
-#   import subprocess, sys
-#   subprocess.check_call([sys.executable, "-m", "pip", "install", "rasterio", "requests"])
+# The plugin needs nothing that a standard QGIS installation does not already
+# provide:
 #
-# (Versions are intentionally unpinned so rasterio binds to QGIS's GDAL.)
-rasterio
-requests
+#   osgeo (GDAL)  ships with QGIS by definition; used for image metadata and
+#                 for reading and georeferencing GeoTIFFs
+#   qgis          the host application's own Python API
+#   requests      present in every QGIS distribution tested (Windows OSGeo4W
+#                 3.44, official QGIS 4.2.1 container); used for all HTTP
+#
+# rasterio was previously required and is NOT bundled with QGIS on any tested
+# platform. It has been removed: every operation now uses GDAL.

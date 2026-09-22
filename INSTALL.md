@@ -16,31 +16,10 @@
 
 QGIS 3.44 or newer is required.
 
-## 2. Install the Python dependencies
+## Dependencies
 
-The plugin needs two Python packages that are not part of a standard QGIS
-installation:
-
-- `rasterio`
-- `requests`
-
-`numpy` and GDAL already ship with QGIS.
-
-These must be installed into **the Python that QGIS itself uses**, which is
-usually not the same Python you get from a normal terminal. The reliable way to
-target the correct interpreter is to install from inside QGIS.
-
-Open Plugins > Python Console in QGIS and run:
-
-```python
-import subprocess, sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "rasterio", "requests"])
-```
-
-Then restart QGIS.
-
-Versions are deliberately left unpinned so that `rasterio` binds against the
-GDAL version your QGIS was built with.
+None. The plugin uses only what a standard QGIS
+installation already provides: the GDAL library and the QGIS
 
 ### If that does not work
 
@@ -48,18 +27,18 @@ GDAL version your QGIS was built with.
 a normal Command Prompt, then run:
 
 ```
-python -m pip install rasterio requests
+
 ```
 
 **macOS.** If QGIS was installed from the official package, use its bundled
 Python:
 
 ```
-/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install rasterio requests
+
 ```
 
 **Linux.** If QGIS came from your distribution's package manager, prefer the
-distribution packages, for example `python3-rasterio` and `python3-requests`,
+
 so they match the system GDAL.
 
 If your environment blocks installation, ask whoever administers the machine to
@@ -83,7 +62,7 @@ downloadable worldwide, but an account may not be usable outside them.
 ## Uninstalling
 
 Plugins > Manage and Install Plugins > Installed, select ATLAS Geo-Dock, then
-Uninstall Plugin. This removes the plugin only. It does not remove `rasterio`
+
 or `requests`, which other software may be using, and it does not delete data
 held by the ATLAS service. To remove your account data, use the account options
 in the plugin or contact AIVE AI Systems.

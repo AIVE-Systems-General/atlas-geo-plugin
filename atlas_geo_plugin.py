@@ -28,7 +28,18 @@ from qgis.core import Qgis, QgsMessageLog
 # which is exactly the impression that let a second basemap implementation sit
 # here unnoticed.
 
-from .resources import *
+# Explicit, not `from .resources import *`.
+#
+# The wildcard was flagged by the QGIS repository scan as F403, and it was
+# genuinely opaque: resources.py is a generated stub whose qt_resource_data is
+# empty, so the wildcard bound a handful of names that nothing in this plugin
+# referenced. Every icon is loaded from disk by path (see initGui), and no ':/'
+# resource URL appears anywhere in the codebase.
+#
+# qInitResources() is still called, because it is the conventional registration
+# hook: if resources.py is ever recompiled with real data, the resources become
+# available without anyone having to remember to add this line back.
+from .resources import qInitResources
 from .atlas_geo_plugin_dialog import AtlasGeoHandlerDemoDialog
 import os
 
@@ -63,6 +74,10 @@ class AtlasGeoHandlerDemo:
         return action
 
     def initGui(self):
+        # Register the compiled Qt resources. Currently a no-op, because the
+        # generated stub carries no data, but it is the hook that makes ':/'
+        # paths work if resources.py is ever recompiled for real.
+        qInitResources()
         # Load directly from disk rather than the compiled Qt resource (:/...) path —
         # icon.png didn't exist when resources.py was last compiled, so the resource
         # path silently resolved to a blank icon. This works regardless of whether
@@ -96,7 +111,7 @@ class AtlasGeoHandlerDemo:
             except Exception as exc:                          # noqa: BLE001
                 QgsMessageLog.logMessage(
                     f"dialog not released on unload: {type(exc).__name__}",
-                    "ATLAS Geo-Dock", level=Qgis.Warning)
+                    "ATLAS Geo-Dock", level=Qgis.MessageLevel.Warning)
             self.dlg = None
         self.first_start = True
 
@@ -150,7 +165,7 @@ class AtlasGeoHandlerDemo:
                 QgsMessageLog.logMessage(
                     f"startup failed at stage=dialog_construct "
                     f"error_class={type(exc).__name__} code={code}",
-                    "ATLAS Geo-Dock", level=Qgis.Critical)
+                    "ATLAS Geo-Dock", level=Qgis.MessageLevel.Critical)
                 QMessageBox.critical(
                     self.iface.mainWindow(),
                     self.tr("ATLAS Geo-Dock could not open"),

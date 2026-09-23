@@ -3,13 +3,32 @@ name=ATLAS Geo-Dock
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.2.99
 description=QGIS integrated plugin for UAV Pose Estimation and UAV-to-Map Registration with batch processing and advanced alignment options
-version=1.1.2
+version=1.1.3
 author=AIVE AI Systems
 email=luis.sentis@aivesystems.com
 about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. DEPENDENCIES: none beyond a standard QGIS installation. The plugin uses the GDAL and Qt libraries QGIS already ships.
 tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
 repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
 changelog=
+    Version 1.1.3 - Session reliability and a QGIS 4 dialog fix. The plugin
+    now renews the session before the normal idle timeout, so leaving QGIS
+    unused for the previously failing period no longer causes an unexpected
+    'Session expired' message. A confirmed rejection or the server's maximum
+    session lifetime can still require you to sign in again. When a session
+    does end, the plugin returns to the sign-in screen on its own and keeps
+    your email address, so Force Logout is no longer needed and the address
+    does not have to be retyped. A dropped connection or a server error no
+    longer signs anyone out: the plugin keeps retrying session renewal
+    while QGIS remains open, and automatically restores the authenticated
+    session when the connection returns.
+    Signing out is now immediate and final, so a request that was already in
+    progress can no longer report an expired session a moment after you have
+    logged out. The sign-in token is no longer written to disk in readable
+    form, and any copy left by an earlier version is removed on start-up. On
+    QGIS 4, dragging any of the plugin's own dialogs by its body no longer
+    raises an error; Qt6 removed the call used to read the pointer's screen
+    position. Also resolves the four Qt6 and two code-quality findings
+    reported by the plugin repository scan.
     Version 1.1.2 - QGIS 4 support and no external Python dependencies.
     One package now serves QGIS 3.44 LTR and the QGIS 4.2 series. Removes
     the requirement to install the 'rasterio' package by hand: image

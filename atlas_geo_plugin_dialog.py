@@ -50,6 +50,66 @@ from qgis.core import Qgis, QgsMessageLog
 _GDAL_IDENTITY_GT = (0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
+# `from qgis.PyQt import sip` resolves to PyQt5.sip on QGIS 3 and PyQt6.sip on
+# QGIS 4; a bare `import sip` works only on PyQt5. Verified on QGIS 3.44.14,
+# 4.2.1 and 4.2.2: sip.isdeleted() is present and correct on all three.
+try:
+    from qgis.PyQt import sip as _sip
+except Exception:                                             # noqa: BLE001
+    _sip = None
+
+
+def _object_is_deleted(obj) -> bool:
+    """True when obj's underlying C++ object is gone.
+
+    Falls back to matching the RuntimeError text only if sip is unavailable,
+    which it never is on the supported versions.
+    """
+    if _sip is None:
+        return False
+    try:
+        return bool(_sip.isdeleted(obj))
+    except (TypeError, RuntimeError):
+        return False
+
+
+def _mouse_global_point(event):
+    """The event's position in GLOBAL screen coordinates, as a QPoint.
+
+    ⚠️ Qt6 REMOVED QMouseEvent.globalPos() OUTRIGHT. It is not deprecated, it
+    is gone, so `event.globalPos()` raises AttributeError the moment a user
+    drags a frameless dialog on QGIS 4. Measured on the three supported
+    versions:
+
+        API                Qt 5.15    Qt 6.9
+        globalPos()        QPoint     ABSENT
+        globalPosition()   ABSENT     QPointF
+        globalX/globalY    int        ABSENT
+        localPos/screenPos QPointF    ABSENT
+        pos()              QPoint     QPoint      <- still fine on both
+
+    Feature detection rather than a Qt version check: the version number is a
+    proxy for what we actually care about, and a proxy that has to be repeated
+    at every call site. One helper, used everywhere, cannot drift.
+
+    Returns QPoint on both, so the caller's arithmetic against
+    frameGeometry().topLeft() is unchanged.
+    """
+    global_position = getattr(event, "globalPosition", None)
+    if callable(global_position):
+        return global_position().toPoint()      # Qt6: QPointF -> QPoint
+    return event.globalPos()                    # Qt5
+
+
+def _is_deleted_object_error(exc) -> bool:
+    """Whether a RuntimeError is the 'wrapped C/C++ object ... deleted' one.
+
+    Used to tell a lifecycle race apart from a genuine bug. Both PyQt5 and
+    PyQt6 raise the identical wording, confirmed on all three versions.
+    """
+    return "has been deleted" in str(exc)
+
+
 class _gdal_quiet:
     """Scoped GDAL error/exception mode for this plugin's reads only.
 
@@ -217,8 +277,8 @@ def _apply_geotransform_in_place(path, west, north, east, south, epsg=4326):
 # metadata. Nothing may log tokens, authorization headers, email addresses
 # or GPS/EXIF values.
 _LOG_TAG = "ATLAS Geo-Dock"
-_LOG_INFO = Qgis.Info
-_LOG_WARNING = Qgis.Warning
+_LOG_INFO = Qgis.MessageLevel.Info
+_LOG_WARNING = Qgis.MessageLevel.Warning
 _log_once_contexts = set()
 _log_last_at = {}
 
@@ -1017,12 +1077,16 @@ class ThemedDialog(QtWidgets.QDialog):
     # Drag-to-move (frameless window has no native title bar)
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._drag_pos = e.globalPos() - self.frameGeometry().topLeft()
+            # _mouse_global_point, NOT e.globalPos(). The latter does not exist
+            # on Qt6 and raised AttributeError as soon as anyone dragged one of
+            # these dialogs on QGIS 4. ThemedDialog is the base for every
+            # themed dialog in the plugin, so this affected all of them.
+            self._drag_pos = _mouse_global_point(e) - self.frameGeometry().topLeft()
             e.accept()
 
     def mouseMoveEvent(self, e):
         if self._drag_pos is not None and (e.buttons() & QtCore.Qt.MouseButton.LeftButton):
-            self.move(e.globalPos() - self._drag_pos)
+            self.move(_mouse_global_point(e) - self._drag_pos)
             e.accept()
 
     def mouseReleaseEvent(self, e):
@@ -1176,6 +1240,92 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self.access_token: str | None = None
         self.refresh_token: str | None = None
+
+        # ── session lifecycle ────────────────────────────────────────────
+        # Keycloak realm settings this must live within:
+        #   accessTokenLifespan   300s   the access token dies after 5 minutes
+        #   ssoSessionIdleTimeout 1800s  the REFRESH token dies after 30 idle
+        #
+        # 1.1.2 refreshed only reactively, on a 401. That cannot survive an
+        # idle period: after 30 minutes with no call, the refresh token itself
+        # is dead, so by the time a 401 arrives the credential needed to
+        # recover from it has already expired. A periodic refresh keeps the
+        # access token current AND resets the idle timer, which is the part
+        # that actually stops the session dying under the user.
+        self._refresh_lock = threading.Lock()
+        # Bumped on every successful token swap. Lets a thread that blocked on
+        # the lock notice that someone else already refreshed, instead of
+        # spending the rotated refresh token a second time.
+        self._token_generation = 0
+        self._session_expired_handled = False
+        # Epoch the pending expiry tear-down belongs to. Read again on the GUI
+        # thread, because a logout or a new sign-in can land between queueing
+        # _on_session_expired and its delivery.
+        self._session_expired_epoch = None
+        # ⚠️ DELIBERATELY NOT _cancel_flag.
+        #
+        # _cancel_flag means "stop processing this batch" and stays set after a
+        # cancelled mission until the next _start_processing. _on_processing_-
+        # cancelled refreshes the balance to show the refund, so gating session
+        # work on _cancel_flag would silently break that display. This event
+        # means "the authenticated session is over": set by an explicit logout
+        # and by an expiry tear-down, cleared when a new session is installed.
+        self._session_cancelled = threading.Event()
+        # Lifetime the SERVER reported for the current access token, in
+        # seconds, or None when it did not say. Drives the refresh schedule.
+        self._access_expires_in = None
+        # Consecutive transient refresh failures (timeout, DNS, 5xx). Reset on
+        # any success. Bounds the retry so a permanently unreachable server
+        # ends the session instead of retrying for ever.
+        self._refresh_failures = 0
+        # ── authentication epoch ─────────────────────────────────────────
+        # Incremented whenever the authenticated session changes identity or
+        # ends: sign-in, logout, expiry teardown, shutdown.
+        #
+        # ⚠️ CHECKING `access_token is not None` IS NOT ENOUGH. A refresh
+        # issued 15 seconds ago can land after the user has logged out AND
+        # signed in as somebody else; at that moment the tokens are not None,
+        # they belong to a different person, and applying the old result would
+        # silently hand the new session the previous user's credentials. The
+        # epoch is what distinguishes "still the same session" from "tokens
+        # happen to be present".
+        self._auth_epoch = 0
+        # ⚠️ SEPARATE FROM _refresh_lock, AND NEVER HELD ACROSS NETWORK I/O.
+        #
+        # _refresh_lock serialises whole refresh attempts and is therefore held
+        # for the duration of a request. This one guards only the authentication
+        # STATE: the epoch and the two tokens. Every read-modify-write of that
+        # state happens under it, so an epoch check and the token write that
+        # depends on it cannot be separated by a logout landing in between.
+        #
+        # Re-entrant because the teardown path legitimately nests: logout bumps
+        # the epoch and clears tokens inside one critical section that also
+        # calls helpers which take it again.
+        self._auth_state_lock = threading.RLock()
+        # Test seam. Called with no lock held, immediately before the commit
+        # critical section, so a test can interleave a logout or a sign-in at
+        # precisely the point the epoch guard has to catch.
+        self._before_commit_hook = None
+        # True between starting a refresh worker and that worker finishing.
+        # With a single-shot timer this is belt and braces, but it also blocks
+        # a manual or reactive path from starting a second overlapping refresh.
+        self._refresh_in_flight = False
+        # Set when the dialog is being torn down, so a worker that outlives it
+        # does not try to touch destroyed Qt objects.
+        self._shutting_down = False
+        self._session_timer = QtCore.QTimer(self)
+        # ⚠️ SINGLE-SHOT, DELIBERATELY.
+        #
+        # A repeating timer combined with a 15s HTTP timeout is a worker
+        # factory: at a 5s retry interval the timer fires at 5s, 10s and 15s
+        # while the first request is still waiting, and three workers pile up,
+        # each eventually spending a rotated refresh token that the others
+        # invalidate. Single-shot makes that impossible by construction: the
+        # timer is re-armed only after an attempt has finished, from
+        # _apply_refresh_schedule or _schedule_backoff_retry.
+        self._session_timer.setSingleShot(True)
+        self._session_timer.setInterval(self.SESSION_REFRESH_FALLBACK_MS)
+        self._session_timer.timeout.connect(self._proactive_refresh)
         self.current_user_email: str | None = None
 
         # Store the GPS coords used for the job so we can georeference the result
@@ -1216,9 +1366,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._restyle_signup_page()
         self._restyle_reset_page()
         self._wire_signals()
-        # Auto sign-in if the user previously chose Remember Me
-        if self._try_auto_signin():
-            self._on_signin_success(self.current_user_email or "", True)
+        # No silent sign-in. 1.1.2 kept a refresh token in plaintext QSettings
+        # to do this; that credential is now purged on startup and never
+        # written again, so the most that can be restored is the address.
+        self._purge_legacy_token()
+        self._prefill_remembered_email()
 
     # ─────────────────────────────────────────────────────────
     # HEADER LOGO
@@ -1492,15 +1644,24 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             response = requests.post(SIGNIN_URL, json={"email": email, "password": password}, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                self.access_token   = data.get("access_token")
-                self.refresh_token  = data.get("refresh_token")
-                self.current_user_email = email
+                # A NEW session starts here, installed atomically: any refresh
+                # still running for the previous sign-in sees the bumped epoch
+                # and discards its result rather than overwriting these tokens.
+                self._install_session(
+                    data.get("access_token"), data.get("refresh_token"),
+                    data.get("expires_in"), email=email)
                 email_verified = data.get("email_verified", False)
+                # "Remember me" now means "remember my email address". It can no
+                # longer mean "stay signed in", because that needed a refresh
+                # token on disk, which is exactly what was removed.
                 cb = getattr(self, "checkbox_remember", None)
-                if cb is not None and cb.isChecked():
-                    self._save_remembered_token()
+                remember = True if cb is None else bool(cb.isChecked())
+                self._set_remember_email(remember)
+                if remember:
+                    self._save_remembered_email()
                 else:
-                    self._clear_remembered_token()
+                    self._forget_remembered_email()
+                self._start_session_timer()
                 QtCore.QMetaObject.invokeMethod(self, "_on_signin_success", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, email), QtCore.Q_ARG(bool, email_verified))
             elif response.status_code == 401:
@@ -3478,8 +3639,43 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _refresh_balance(self):
         """Fetch the token balance in a background thread and update the strip."""
+        # ⚠️ CAPTURED ON THE CALLING THREAD, BEFORE THE WORKER STARTS, so the
+        # worker is pinned to the session that asked for the refresh rather
+        # than to whatever session happens to exist when it gets scheduled.
+        epoch = self._current_auth_epoch()
+
         def _work():
+            # ⚠️ GUARDED FOR DIALOG LIFETIME, NARROWLY.
+            #
+            # This worker outlives the dialog when the plugin is unloaded, or
+            # QGIS closes, while the balance request is still open. The
+            # invokeMethod calls below then raise RuntimeError from a daemon
+            # thread, which surfaces as a traceback in the QGIS log on an
+            # unlucky unload. Observed as an unhandled thread exception in
+            # testing.
+            #
+            # ⚠️ ONLY THE MARSHALLING IS GUARDED, via _invoke_on_gui. Wrapping
+            # the whole function in `except RuntimeError` would also swallow a
+            # genuine bug in _fetch_balance or _format_balance and make it look
+            # like an unload race. _invoke_on_gui re-raises any RuntimeError
+            # that is not the deleted-object one.
+            #
+            # NOTE: this is one instance of a wider pattern. Many worker
+            # threads in this dialog marshal results back with a bare
+            # invokeMethod and no lifetime guard; they shipped that way in
+            # 1.1.2. Only the one actually observed failing is fixed here.
+            # Converting the rest is recorded as separate technical debt.
+            if self._shutting_down or _object_is_deleted(self):
+                return
+            if not self._session_is_current(epoch):
+                return
             bal = self._fetch_balance()
+            # ⚠️ RE-CHECKED AFTER EVERY AUTHENTICATED CALL, NOT ONLY AT THE
+            # START. /balance can take its full 10s timeout, and a logout
+            # arriving in that window used to leave the two calls below to run
+            # against a session that no longer existed.
+            if not self._session_is_current(epoch):
+                return
             label, tip = self._format_balance(bal)
             # Phase-1B: storage lives in the profile dropdown (calm state) to keep the
             # header chip clean. It only escalates onto the main chip when the user is
@@ -3487,6 +3683,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # their face. Fail-soft: older deploys without the endpoint just show
             # images/credits exactly as before, and the dropdown line stays "…".
             usage = self._get_storage_usage()
+            if not self._session_is_current(epoch):
+                return
             storage_line = ""      # dropdown text
             storage_over = False   # drives the ⚠ escalation
             if usage:
@@ -3507,29 +3705,31 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # Escalate to the header chip only when it matters (>=90% or over).
                 if over or pct >= 90.0:
                     label = f"{label} · {used_disp}/{quota_gb:.0f} GB" + (" ⚠" if over else "")
-            QtCore.QMetaObject.invokeMethod(self, "_set_balance_ui",
-                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
-            QtCore.QMetaObject.invokeMethod(self, "_set_storage_ui",
-                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, storage_line),
-                QtCore.Q_ARG(bool, storage_over))
+            self._invoke_on_gui("_set_balance_ui",
+                                QtCore.Q_ARG(str, label), QtCore.Q_ARG(str, tip))
+            self._invoke_on_gui("_set_storage_ui",
+                                QtCore.Q_ARG(str, storage_line),
+                                QtCore.Q_ARG(bool, storage_over))
             # Show/hide the on-demand "Move my files to the team" menu item — visible
             # whenever an org member still has un-migrated personal files.
-            QtCore.QMetaObject.invokeMethod(self, "_set_migration_ui",
-                QtCore.Qt.ConnectionType.QueuedConnection,
+            self._invoke_on_gui(
+                "_set_migration_ui",
                 QtCore.Q_ARG(bool, bool(bal and bal.get("org_has_personal_files"))))
             # Trial-request state, but only for PAYG users — anyone on a plan can't
             # receive a trial, so the call would be wasted on every refresh.
             tier = (bal or {}).get("tier") or "payg"
             trial_state = (self._get_trial_status()
                            if str(tier).lower() == "payg" else "none")
-            QtCore.QMetaObject.invokeMethod(self, "_set_trial_request_ui",
-                QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, trial_state))
+            if not self._session_is_current(epoch):
+                return
+            self._invoke_on_gui("_set_trial_request_ui",
+                                QtCore.Q_ARG(str, trial_state))
             # Newly-seated org member with pre-existing files → offer the one-time
             # migrate-or-keep choice (backend flag clears once they decide). Older
             # backends omit the field, so this simply never fires there.
             if bal and bal.get("org_migration_pending"):
-                QtCore.QMetaObject.invokeMethod(self, "_prompt_file_migration",
-                    QtCore.Qt.ConnectionType.QueuedConnection,
+                self._invoke_on_gui(
+                    "_prompt_file_migration",
                     QtCore.Q_ARG(str, bal.get("org_name") or "your team"))
         threading.Thread(target=_work, daemon=True).start()
 
@@ -3642,12 +3842,22 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                        if d.get("available_tokens") is not None
                        else (d.get("subscription_tokens") or 0) + (d.get("purchased_tokens") or 0))
 
+        watch_epoch = self._current_auth_epoch()
+
         def _work():
             try:
+                if not self._session_is_current(watch_epoch):
+                    return
                 base_total = _total(self._fetch_balance())
                 deadline = time.time() + timeout
                 while time.time() < deadline:
                     time.sleep(interval)
+                    # Same rule as the one-shot refresh: this loop keeps
+                    # issuing authenticated calls for up to three minutes, so
+                    # it has to notice a logout rather than poll a dead session
+                    # to its deadline.
+                    if not self._session_is_current(watch_epoch):
+                        return
                     cur = self._fetch_balance()
                     if not cur:
                         continue
@@ -3665,7 +3875,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         user returns from the Stripe Checkout browser tab after paying."""
         super().changeEvent(e)
         if e.type() == QtCore.QEvent.Type.ActivationChange and self.isActiveWindow():
-            if getattr(self, "_billing_strip_built", False):
+            # ⚠️ ONLY FOR A LIVE AUTHENTICATED SESSION.
+            #
+            # This is how the reported defect was triggered. Clicking "Log out"
+            # closes the confirmation dialog, which hands focus straight back
+            # to this window, which started a balance refresh at the exact
+            # moment the session was being torn down. The late 401 then came
+            # back as "Your session expired". A focus change must not start
+            # authenticated work while logging out or on the sign-in page.
+            if (getattr(self, "_billing_strip_built", False)
+                    and self._session_is_active()):
                 self._refresh_balance()
 
     @QtCore.pyqtSlot(str, str)
@@ -4904,25 +5123,73 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 "Log out?",
                 "You'll need to sign in again to upload imagery or manage billing.",
                 confirm_text="Log out", cancel_text="Stay", accent="orange"):
-            threading.Thread(target=self._logout_thread, daemon=True).start()
+            # ⚠️ THE LOCAL TEAR-DOWN HAPPENS FIRST, SYNCHRONOUSLY, BEFORE THE
+            # SERVER IS TOLD ANYTHING. Everything already in flight becomes
+            # stale the instant the user commits to logging out, so nothing it
+            # returns can be mistaken for an expiry.
+            token = self._begin_explicit_logout()
+            threading.Thread(target=self._logout_thread,
+                             kwargs={"token": token}, daemon=True).start()
 
-    def _logout_thread(self):
+    def _begin_explicit_logout(self):
+        """End the session locally and authoritatively. Idempotent.
+
+        Returns the access token that was in use, so the best-effort server
+        sign-out can still present it. It is returned rather than left on the
+        instance precisely so the instance is clean the moment this returns.
+
+        ⚠️ AN EXPLICIT LOGOUT IS NOT AN EXPIRY. The latch is closed here, which
+        is what stops a late 401 from any in-flight request announcing "Your
+        session expired" after "Logged out successfully".
+        """
+        with self._auth_state_lock:
+            token = self.access_token
+            self._session_expired_handled = True
+            self._session_expired_epoch = None
+            self._auth_epoch += 1
+            self.access_token = None
+            self.refresh_token = None
+            self._access_expires_in = None
+            self._refresh_failures = 0
+            # ⚠️ current_user_email IS KEPT. Signing out means "end my
+            # session", not "forget who I am"; the sign-in page is refilled
+            # from it so nobody has to retype an address the plugin knows.
+        # Cancel background session work. Set OUTSIDE the lock: an Event has
+        # its own, and holding ours across unrelated waiters buys nothing.
+        self._session_cancelled.set()
+        # AutoConnection: a direct call from the GUI thread stops the timer
+        # immediately, which is the point of doing this first; a worker-thread
+        # caller still gets a correctly queued invocation.
+        QtCore.QMetaObject.invokeMethod(
+            self, "_stop_session_timer", QtCore.Qt.ConnectionType.AutoConnection)
+        return token
+
+    def _logout_thread(self, token=None):
+        """Best-effort server-side sign-out. Never reports a session expiry.
+
+        The local session is already gone by the time this runs. Whatever the
+        server says, including 400 or 401, changes nothing here: the user asked
+        to be signed out and they are.
+        """
+        if token is None:
+            # A direct caller that did not go through _handle_logout still gets
+            # the full local tear-down, in the right order.
+            token = self._begin_explicit_logout()
         try:
             headers = {}
-            if self.access_token:
-                headers["Authorization"] = f"Bearer {self.access_token}"
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             requests.post(LOGOUT_URL, json={}, headers=headers, timeout=10)
         except requests.RequestException as exc:
-            # Sign-out still completes locally in the finally block; only the
-            # server's confirmation is missing. Class name only, never the
-            # token.
+            # Sign-out already completed locally; only the server's
+            # confirmation is missing. Class name only, never the token.
             _log_nonfatal("server logout not confirmed", exc,
                           level=_LOG_WARNING)
         finally:
-            self.access_token = None
-            self.refresh_token = None
-            self.current_user_email = None
-            self._clear_remembered_token()
+            # ⚠️ THE REMEMBERED ADDRESS SURVIVES AN ORDINARY LOG-OUT.
+            # Only turning Remember Email off, or an explicit forget, removes it.
+            if not self._remember_email_enabled():
+                self._forget_remembered_email()
             QtCore.QMetaObject.invokeMethod(self, "_on_logout_complete", QtCore.Qt.ConnectionType.QueuedConnection)
 
     @QtCore.pyqtSlot()
@@ -4932,6 +5199,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self.iface.messageBar().pushMessage("ATLAS", "Logged out successfully.",
                                             level=Qgis.MessageLevel.Info, duration=3)
         self._go_to_signin()
+        # Same courtesy as the expiry path: the address is already known, so
+        # the user types a password and nothing else.
+        self._prefill_remembered_email()
 
     # ─────────────────────────────────────────────────────────
     # VALIDATION
@@ -5408,71 +5678,619 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._processing_thread = threading.Thread(target=self._run_backend_request, daemon=True)
         self._processing_thread.start()
 
-    # ── Remember Me persistence (QSettings — survives QGIS restarts) ──────────
+    # ── Remembered email (QSettings) ──────────────────────────────────────────
+    #
+    # ⚠️ THE REFRESH TOKEN IS NEVER WRITTEN TO DISK.
+    #
+    # 1.1.2 stored it here in clear text: the Windows registry under HKCU, a
+    # plist on macOS. That is a long-lived credential readable by anything
+    # running as that user. Tokens now live in memory for the lifetime of the
+    # QGIS session and nowhere else.
+    #
+    # The cost is that signing in does not survive a QGIS restart. Restoring
+    # that safely needs QgsAuthManager, whose encrypted store requires the user
+    # to set and then enter a master password, so it is a deliberate piece of
+    # separate work rather than something to bolt on here.
+    #
+    # Only the email address is remembered, which is what "Remember me" now
+    # means. An email address is not a credential.
     _SETTINGS_ORG  = "AIVE"
     _SETTINGS_APP  = "AtlasGeo"
-    _SETTINGS_KEY  = "auth/refresh_token"
+    _SETTINGS_KEY  = "auth/refresh_token"      # legacy, purged on sight
     _SETTINGS_EMAIL = "auth/email"
+    _SETTINGS_REMEMBER = "auth/remember_email"
 
-    def _save_remembered_token(self):
+    def _remember_email_enabled(self) -> bool:
+        """Whether the user asked for their address to be remembered.
+
+        Defaults to True when the setting has never been written, which matches
+        what someone who has just used Remember Me would expect after an
+        upgrade.
+        """
         s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
-        s.setValue(self._SETTINGS_KEY,  self.refresh_token or "")
-        s.setValue(self._SETTINGS_EMAIL, self.current_user_email or "")
+        value = s.value(self._SETTINGS_REMEMBER, True)
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() not in ("false", "0", "")
 
-    def _clear_remembered_token(self):
+    def _set_remember_email(self, enabled: bool):
         s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
-        s.remove(self._SETTINGS_KEY)
-        s.remove(self._SETTINGS_EMAIL)
+        s.setValue(self._SETTINGS_REMEMBER, bool(enabled))
+        if not enabled:
+            s.remove(self._SETTINGS_EMAIL)
 
-    def _try_auto_signin(self):
-        """On startup: if a saved refresh token exists, silently exchange it for
-        a new access token and go straight to the setup page. Shows sign-in page
-        on any failure so the user can log in normally."""
-        s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
-        saved_token = s.value(self._SETTINGS_KEY, "")
-        saved_email = s.value(self._SETTINGS_EMAIL, "")
-        if not saved_token:
-            return False
-        self.refresh_token = saved_token
-        self.current_user_email = saved_email
-        ok = self._refresh_access_token()
-        if ok:
-            self._save_remembered_token()   # persist the rotated refresh token
-            return True
-        # Token expired / revoked — clear and fall through to sign-in
-        self._clear_remembered_token()
-        self.refresh_token = None
-        self.current_user_email = None
-        return False
+    def _purge_legacy_token(self):
+        """Delete the plaintext refresh token written by 1.1.2 and earlier.
 
-    def _refresh_access_token(self) -> bool:
-        """Use the stored refresh token to get a new access token.
-        Returns True on success (self.access_token updated), False if the
-        refresh token is also expired/invalid (user must sign in again)."""
-        if not self.refresh_token:
-            return False
+        Not merely "stop writing it": anyone who ran 1.1.2 still has one sitting
+        in the registry or a plist. Upgrading must remove it, otherwise the
+        credential outlives the version that created it.
+        """
         try:
-            resp = requests.post(
-                REFRESH_URL, json={"refresh_token": self.refresh_token}, timeout=15
-            )
-            if resp.status_code == 200:
+            s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
+            if s.contains(self._SETTINGS_KEY):
+                s.remove(self._SETTINGS_KEY)
+                s.sync()
+        except Exception as exc:                          # noqa: BLE001
+            _log_nonfatal("legacy token not purged", exc, once=True)
+
+    def _save_remembered_email(self):
+        s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
+        s.setValue(self._SETTINGS_EMAIL, self.current_user_email or "")
+        s.remove(self._SETTINGS_KEY)          # belt and braces
+
+    def _forget_remembered_email(self):
+        s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
+        s.remove(self._SETTINGS_EMAIL)
+        s.remove(self._SETTINGS_KEY)
+
+    def _remembered_email(self) -> str:
+        s = QtCore.QSettings(self._SETTINGS_ORG, self._SETTINGS_APP)
+        return str(s.value(self._SETTINGS_EMAIL, "") or "")
+
+    def _prefill_remembered_email(self):
+        """Put the remembered address back in the sign-in field.
+
+        This addresses the second issue reported from field use: being bounced
+        to sign-in and then having to retype an address the plugin already knew.
+        """
+        email = self._remembered_email()
+        if email and hasattr(self, "input_email"):
+            self.input_email.setText(email)
+            if hasattr(self, "input_password"):
+                self.input_password.setFocus()
+
+    # Outcomes of a refresh attempt. The distinction matters: a flaky network
+    # must NOT sign the user out, and a revoked credential must not be retried
+    # for ever.
+    REFRESH_OK        = "ok"          # new access token in hand
+    REFRESH_TRANSIENT = "transient"   # timeout, DNS, connection reset, 5xx
+    REFRESH_TERMINAL  = "terminal"    # invalid_grant, or a confirmed 400/401
+    REFRESH_STALE     = "stale"       # the session it belonged to is gone
+
+    # A token that claims to live less than this is not something we can
+    # schedule around sensibly; the reactive 401 path covers it instead.
+    MIN_SANE_EXPIRES_IN_S = 10
+    MAX_SANE_EXPIRES_IN_S = 86_400          # 24h; beyond that it is junk
+    # Absolute floor on the timer, so a short-lived token cannot turn into a
+    # request storm.
+    MIN_REFRESH_INTERVAL_MS = 5_000
+    # How far before the stated expiry the refresh must land, at the latest.
+    REFRESH_SAFETY_MARGIN_MS = 1_000
+
+    def _coerce_expires_in(self, value):
+        """Return expires_in in seconds, or None if it is unusable.
+
+        Explicitly strict, because a wrong answer here schedules the refresh
+        after the token has already died:
+
+          * bool is REJECTED. In Python `float(True) == 1.0`, so a JSON `true`
+            would otherwise be read as a one-second lifetime.
+          * numeric strings are ACCEPTED: JSON encoders differ, and "300" is
+            unambiguous.
+          * anything below MIN_SANE_EXPIRES_IN_S or above
+            MAX_SANE_EXPIRES_IN_S is rejected as implausible.
+        """
+        if isinstance(value, bool):
+            return None
+        if not isinstance(value, (int, float, str)):
+            return None
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return None
+        if seconds != seconds or seconds in (float("inf"), float("-inf")):
+            return None                      # NaN / infinity
+        if not (self.MIN_SANE_EXPIRES_IN_S <= seconds <= self.MAX_SANE_EXPIRES_IN_S):
+            return None
+        return seconds
+
+    def _refresh_interval_ms(self) -> int:
+        """Refresh at ~80% of the token's real lifetime.
+
+        ⚠️ AS OF WRITING THE BACKEND DOES NOT SEND expires_in: auth_api.py
+        returns only access_token, refresh_token and token_type on both
+        /signin and /refresh, so the fallback below is what actually runs. The
+        derived path is implemented and tested so that adding the field
+        server-side needs no plugin change.
+
+        The fallback is 240s against a 300s accessTokenLifespan, which is the
+        same 80% ratio, and comfortably inside the 1800s idle timeout.
+        """
+        seconds = self._access_expires_in
+        if seconds is None:
+            return self.SESSION_REFRESH_FALLBACK_MS
+
+        lifetime_ms = int(seconds * 1000)
+        target_ms = int(lifetime_ms * 0.8)
+        # ⚠️ NEVER SCHEDULE AT OR AFTER EXPIRY. An earlier version applied a
+        # flat 30s floor, which for a 10s token produced a refresh 20s after it
+        # had already died. The floor must never win against the deadline, so
+        # it is clamped by the latest safe moment first.
+        latest_safe_ms = lifetime_ms - self.REFRESH_SAFETY_MARGIN_MS
+        interval = min(target_ms, latest_safe_ms)
+        interval = max(self.MIN_REFRESH_INTERVAL_MS, interval)
+        # Final guarantee, whatever the arithmetic above produced.
+        return min(interval, latest_safe_ms)
+
+    @QtCore.pyqtSlot()
+    def _apply_refresh_schedule(self):
+        """Re-arm the timer from the newest expires_in. GUI thread only.
+
+        QTimer is not thread-safe, so worker threads reach this through
+        invokeMethod rather than touching the timer directly.
+        """
+        interval = self._refresh_interval_ms()
+        if self._session_timer.interval() != interval:
+            self._session_timer.setInterval(interval)
+        if not self._session_expired_handled and not self._session_timer.isActive():
+            self._session_timer.start()
+
+    # NOTE: there is deliberately no boolean _refresh_access_token() wrapper.
+    # It existed, and the image-upload path used it; collapsing TRANSIENT and
+    # TERMINAL into False meant a refresh timeout during an upload was
+    # indistinguishable from a revoked credential, and the caller signed the
+    # user out for a network blip. Every caller now handles the tri-state.
+
+    def _attempt_refresh(self) -> str:
+        """Exchange the refresh token for a new access token. Single-flight.
+
+        ⚠️ CONCURRENCY IS A CORRECTNESS PROBLEM HERE, NOT AN EFFICIENCY ONE.
+        Keycloak ROTATES refresh tokens: the moment one is redeemed it is dead.
+        Two threads hitting a 401 at the same time would both POST the same
+        token; the first succeeds, the second presents an already-consumed
+        token and is refused, and on a realm with reuse detection that can kill
+        the whole session. So refreshes are serialised, and a thread that finds
+        the work already done adopts the result instead of repeating it.
+
+        Returns True when self.access_token is usable afterwards.
+        """
+        generation_on_entry = self._token_generation
+        with self._refresh_lock:
+            # Capture epoch and the token to spend in ONE critical section, so
+            # the value sent is provably the one the epoch describes.
+            with self._auth_state_lock:
+                if self._token_generation != generation_on_entry:
+                    # Another thread refreshed while this one waited for the
+                    # lock. Its tokens are in place; re-spending ours would
+                    # fail against a rotating refresh token.
+                    return (self.REFRESH_OK if self.access_token
+                            else self.REFRESH_TERMINAL)
+                if not self.refresh_token:
+                    # Nothing to refresh WITH. Not a network problem; retrying
+                    # cannot help.
+                    return self.REFRESH_TERMINAL
+                epoch_on_entry = self._auth_epoch
+                token_to_spend = self.refresh_token
+
+            # ⚠️ NO AUTH-STATE LOCK HELD ACROSS THIS REQUEST. Holding it here
+            # would block logout, sign-in and teardown for up to 15 seconds.
+            try:
+                resp = requests.post(
+                    REFRESH_URL, json={"refresh_token": token_to_spend},
+                    timeout=15,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                # The server was never reached. The session may be perfectly
+                # valid; the user is on a train. Keep the tokens.
+                _log_nonfatal("token refresh unreachable", exc,
+                              level=_LOG_WARNING, min_interval_s=60)
+                return self.REFRESH_TRANSIENT
+            except requests.RequestException as exc:
+                _log_nonfatal("token refresh failed", exc, level=_LOG_WARNING)
+                return self.REFRESH_TRANSIENT
+
+            if resp.status_code >= 500:
+                # Their fault, not the credential's. Retry with backoff.
+                _log_nonfatal(
+                    f"token refresh server error status={resp.status_code}",
+                    None, level=_LOG_WARNING, min_interval_s=60)
+                return self.REFRESH_TRANSIENT
+
+            if resp.status_code in (400, 401):
+                # A confirmed rejection of the credential itself. Keycloak
+                # reports a revoked, reused or expired refresh token as
+                # invalid_grant. Retrying is pointless and, with reuse
+                # detection on, actively harmful.
+                return self.REFRESH_TERMINAL
+
+            if resp.status_code != 200:
+                # Unexpected but not a stated rejection: treat conservatively
+                # as transient so an odd proxy response cannot sign anyone out.
+                return self.REFRESH_TRANSIENT
+
+            try:
                 data = resp.json()
-                self.access_token = data.get("access_token")
-                # Keycloak rotates refresh tokens — keep the new one.
+            except ValueError as exc:
+                _log_nonfatal("token refresh response unreadable", exc,
+                              level=_LOG_WARNING, min_interval_s=60)
+                return self.REFRESH_TRANSIENT
+
+            new_access = data.get("access_token")
+            if not new_access:
+                # 200 with no token is a broken contract, not a success. Bounded
+                # retry will end the session if it keeps happening.
+                return self.REFRESH_TRANSIENT
+
+            # Test seam, deliberately OUTSIDE the commit critical section: a
+            # test pauses here and performs a logout or a sign-in, proving the
+            # guard below is what prevents the stale write rather than mere
+            # timing.
+            if self._before_commit_hook is not None:
+                self._before_commit_hook()
+
+            # ⚠️ VALIDATE AND COMMIT IN ONE CRITICAL SECTION.
+            #
+            # These were previously two separate steps, and _new_auth_epoch did
+            # not take any shared lock, so a logout could land between the check
+            # and the write and have its cleared tokens overwritten immediately
+            # afterwards. Both now happen under the auth-state lock, which every
+            # session change also takes.
+            with self._auth_state_lock:
+                if self._auth_epoch != epoch_on_entry:
+                    return self.REFRESH_STALE
+                self.access_token = new_access
                 if data.get("refresh_token"):
                     self.refresh_token = data.get("refresh_token")
-                return True
-        except (requests.RequestException, ValueError, AttributeError) as exc:
-            # Fails closed: False sends the caller to "sign in again". Class
-            # name only, never the response body, which carries tokens.
-            _log_nonfatal("token refresh failed", exc, level=_LOG_WARNING)
-        return False
+                self._access_expires_in = self._coerce_expires_in(
+                    data.get("expires_in"))
+                self._token_generation += 1
+                return self.REFRESH_OK
+
+    # ── proactive refresh, the part that stops the 30-minute idle death ──
+    #
+    # Documented fallback only. The real schedule comes from the server's
+    # expires_in when it sends one; see _refresh_interval_ms.
+    SESSION_REFRESH_FALLBACK_MS = 240_000      # 4 min = 80% of a 300s token
+    # Backoff between TRANSIENT retries, seconds. The last value is the ceiling
+    # and repeats for as long as failures continue.
+    #
+    # ⚠️ THERE IS NO FAILURE COUNT THAT ENDS THE SESSION.
+    #
+    # A timeout, a DNS failure or a 502 says something about the network or the
+    # server. None of them is evidence that the refresh token is invalid, and
+    # signing a user out because their train went into a tunnel is the same
+    # class of defect as the one being fixed. The plugin keeps retrying at the
+    # capped interval for as long as QGIS is open, and the session ends ONLY on
+    # an authoritative signal: a confirmed 400/401 rejection of the credential,
+    # an explicit logout, or shutdown.
+    REFRESH_BACKOFF_S = (5, 15, 45, 90, 180, 300)
+
+    def _start_session_timer(self):
+        self._session_expired_handled = False
+        self._refresh_failures = 0
+        self._apply_refresh_schedule()
+
+    # pyqtSlot: _logout_thread reaches this via invokeMethod from a worker
+    # thread, and Qt can only dispatch to a REGISTERED slot. Without the
+    # decorator the call fails at runtime with "No such method".
+    # NOTE: a bare _new_auth_epoch() helper used to sit here. It became
+    # production-dead once every real transition moved to _install_session and
+    # _clear_session, which bump the epoch and mutate the tokens in the SAME
+    # critical section. Keeping a method that bumps the epoch on its own would
+    # be an invitation to reintroduce the non-atomic pattern, so it is gone;
+    # tests drive the real transitions instead.
+
+    def _current_auth_epoch(self) -> int:
+        """The live authentication epoch, read under the lock."""
+        with self._auth_state_lock:
+            return self._auth_epoch
+
+    def _session_is_current(self, epoch) -> bool:
+        """Whether work started under `epoch` may still act on this session.
+
+        ⚠️ BACKGROUND WORK MUST ASK THIS BETWEEN REQUESTS, NOT ONLY AT THE
+        START. The balance worker issues three authenticated calls in a row; a
+        logout landing after the first one used to leave the other two to run
+        against a session the user had already ended.
+        """
+        if self._shutting_down or self._session_expired_handled:
+            return False
+        if self._session_cancelled.is_set():
+            return False
+        with self._auth_state_lock:
+            return self._auth_epoch == epoch and self.access_token is not None
+
+    def _session_is_active(self) -> bool:
+        """Whether there is a live authenticated session on a signed-in page.
+
+        Used by changeEvent, which must not start an authenticated refresh
+        because a dialog closing handed focus back during a logout.
+        """
+        if self._shutting_down or self._session_expired_handled:
+            return False
+        if self._session_cancelled.is_set():
+            return False
+        pages = getattr(self, "stacked_pages", None)
+        if pages is not None:
+            try:
+                if pages.currentIndex() in (self.PAGE_SIGNIN, self.PAGE_SIGNUP):
+                    return False
+            except RuntimeError:
+                return False
+        with self._auth_state_lock:
+            return self.access_token is not None
+
+    def _install_session(self, access, refresh, expires_in, email=None):
+        """Atomically start a NEW authenticated session."""
+        with self._auth_state_lock:
+            self._auth_epoch += 1
+            self.access_token = access
+            self.refresh_token = refresh
+            self._access_expires_in = self._coerce_expires_in(expires_in)
+            if email is not None:
+                self.current_user_email = email
+            # A new session starts with a clean latch, so a later genuine
+            # expiry in THIS session is still reported exactly once.
+            self._session_expired_handled = False
+            self._session_expired_epoch = None
+            self._session_cancelled.clear()
+            self._refresh_failures = 0
+            return self._auth_epoch
+
+    def _clear_session(self, forget_email=False):
+        """Atomically end the current session.
+
+        The epoch is bumped in the SAME critical section that clears the
+        tokens. A refresh committing concurrently either sees the old epoch and
+        writes before this runs, or sees the new one and discards; it can never
+        observe the epoch as unchanged and then write after the clear.
+        """
+        with self._auth_state_lock:
+            self._auth_epoch += 1
+            self.access_token = None
+            self.refresh_token = None
+            self._access_expires_in = None
+            self._refresh_failures = 0
+            if forget_email:
+                self.current_user_email = None
+            return self._auth_epoch
+
+    @QtCore.pyqtSlot()
+    def _stop_session_timer(self):
+        if self._session_timer.isActive():
+            self._session_timer.stop()
+
+    def shutdown_session(self):
+        """Called when the dialog is going away (unload, close).
+
+        An in-flight refresh worker may still be waiting on a 15s request. This
+        tells it not to touch the dialog when it wakes up.
+        """
+        self._shutting_down = True
+        self._session_expired_handled = True
+        # Atomic invalidation: anything in flight is now stale by definition.
+        with self._auth_state_lock:
+            self._auth_epoch += 1
+        try:
+            self._stop_session_timer()
+        except RuntimeError:
+            # The timer's C++ object is already gone; there is nothing to stop
+            # and nothing wrong. Logging here would be noise on every unload.
+            self._shutting_down = True
+
+    def _proactive_refresh(self):
+        """Timer tick. Starts the work; performs none of it.
+
+        ⚠️ NO NETWORK I/O HAPPENS IN THIS METHOD. It runs on the GUI thread,
+        because QTimer.timeout is delivered there, and a blocking POST here
+        would freeze the QGIS window for the duration of the request, up to the
+        15 second timeout. Everything past the thread start runs off the GUI
+        thread, and results come back through invokeMethod.
+        """
+        if not self.refresh_token or self._session_expired_handled:
+            return
+        # Test-and-set ATOMICALLY. A plain `if flag: return` followed by
+        # `flag = True` is two operations, and although the only caller today
+        # is the GUI-thread timer, nothing in the signature says so. Doing it
+        # under the lock means a future caller on another thread cannot slip
+        # between the check and the set and stack a second worker.
+        with self._auth_state_lock:
+            if self._refresh_in_flight:
+                # Cannot normally happen with a single-shot timer, which is not
+                # re-armed until the worker finishes.
+                return
+            self._refresh_in_flight = True
+        threading.Thread(target=self._proactive_refresh_thread,
+                         name="atlas-token-refresh", daemon=True).start()
+
+    def _invoke_on_gui(self, slot_name, *args):
+        """Marshal a call to the GUI thread, tolerating a destroyed dialog.
+
+        A refresh worker can outlive the dialog: the user unloads the plugin or
+        closes QGIS while a 15s request is still waiting. Touching a deleted
+        C++ object from the worker raises RuntimeError, so the attempt is
+        guarded rather than allowed to kill the thread with a traceback.
+        """
+        if self._shutting_down or _object_is_deleted(self):
+            return False
+        try:
+            QtCore.QMetaObject.invokeMethod(
+                self, slot_name, QtCore.Qt.ConnectionType.QueuedConnection, *args)
+            return True
+        except RuntimeError as exc:
+            if not _is_deleted_object_error(exc):
+                # NOT a lifecycle race. Swallowing this would hide a real bug,
+                # so it goes back up.
+                raise
+            # Dialog already destroyed. Nothing to update, and nothing wrong.
+            self._shutting_down = True
+            return False
+
+    def _proactive_refresh_thread(self):
+        """Worker thread. The only place the refresh POST is issued from.
+
+        Wrapped against RuntimeError throughout. If the dialog's C++ object is
+        destroyed while the request is open, every attribute access on `self`
+        raises, including the ones in the guards below. Letting that escape
+        would print a traceback from a daemon thread on every plugin unload
+        that happened to coincide with a refresh.
+        """
+        try:
+            self._proactive_refresh_attempt()
+        except RuntimeError:
+            # Dialog already destroyed. Nothing to update; nothing wrong.
+            return
+
+    def _proactive_refresh_attempt(self):
+        epoch_on_entry = self._auth_epoch
+        try:
+            outcome = self._attempt_refresh()
+        finally:
+            # Released whatever happened, so the timer can be re-armed and a
+            # later attempt is never blocked by a crashed one.
+            self._refresh_in_flight = False
+
+        if self._shutting_down:
+            return
+
+        # ⚠️ NOTHING BELOW THIS LINE MAY RUN FOR A SESSION THAT HAS ENDED.
+        # Re-arming the timer, showing a message or resetting the failure count
+        # would all be acting on behalf of a session the user has already left.
+        if outcome == self.REFRESH_STALE or self._auth_epoch != epoch_on_entry:
+            return
+
+        if outcome == self.REFRESH_OK:
+            self._refresh_failures = 0
+            self._invoke_on_gui("_apply_refresh_schedule")
+            return
+
+        if outcome == self.REFRESH_TERMINAL:
+            # The credential itself was refused. Nothing to wait for. The epoch
+            # is passed so a teardown cannot fire for a session that has since
+            # been replaced.
+            self._notify_session_expired(epoch=epoch_on_entry)
+            return
+
+        # Transient: the session is probably fine and the network is not.
+        # Keep retrying, at a capped interval, indefinitely. The tokens are
+        # untouched, so a later success resumes exactly where this left off.
+        self._refresh_failures += 1
+        idx = min(self._refresh_failures - 1, len(self.REFRESH_BACKOFF_S) - 1)
+        delay = self.REFRESH_BACKOFF_S[idx]
+        if self._refresh_failures in (1, 5, 20) or self._refresh_failures % 100 == 0:
+            # Enough to see it in a log without flooding one.
+            _log_nonfatal(
+                f"token refresh retrying, consecutive transient failures="
+                f"{self._refresh_failures}, next attempt in {delay}s",
+                None, level=_LOG_WARNING)
+        self._invoke_on_gui("_schedule_backoff_retry", QtCore.Q_ARG(int, delay))
+
+    @QtCore.pyqtSlot(int)
+    def _schedule_backoff_retry(self, seconds: int):
+        """Re-arm the timer for a short retry. GUI thread only."""
+        if self._session_expired_handled:
+            return
+        self._session_timer.setInterval(max(1000, seconds * 1000))
+        if not self._session_timer.isActive():
+            self._session_timer.start()
+
+    # ── session expiry: one tear-down, from any thread, exactly once ─────
+    def _notify_session_expired(self, epoch=None):
+        """Safe to call from any thread and any number of times.
+
+        `epoch` is the authentication epoch the caller was working under. If it
+        no longer matches, the session that failed has already been replaced or
+        torn down, and telling the current user their session expired would be
+        both wrong and alarming.
+        """
+        # STAGE 1. Both the epoch test and the latch are taken under the lock,
+        # so a logout cannot slip between them and find the latch still open.
+        with self._auth_state_lock:
+            if epoch is None:
+                epoch = self._auth_epoch
+            if epoch != self._auth_epoch:
+                return
+            if self._session_expired_handled:
+                return
+            self._session_expired_handled = True
+            self._session_expired_epoch = epoch
+        self._session_cancelled.set()
+        # Stop authenticated polling at its existing interruption point rather
+        # than inventing a second flag the loops would also have to check.
+        try:
+            self._cancel_flag.set()
+        except Exception as exc:                          # noqa: BLE001
+            # Never silently: a swallowed failure here means polling keeps
+            # running against a dead session, which is half of the defect this
+            # method exists to fix.
+            _log_nonfatal("polling not stopped on session expiry", exc,
+                          level=_LOG_WARNING, once=True)
+        QtCore.QMetaObject.invokeMethod(
+            self, "_on_session_expired", QtCore.Qt.ConnectionType.QueuedConnection)
+
+    @QtCore.pyqtSlot()
+    def _on_session_expired(self):
+        """Return to sign-in cleanly. GUI thread only.
+
+        1.1.2 raised an exception with this message and did nothing else, so the
+        tokens stayed set, the header still showed the user, polling kept
+        running, and the only escape was Force Logout. Everything below is the
+        tear-down that was missing.
+        """
+        # STAGE 2. This slot is QUEUED, so the world can change between the
+        # decision to expire and this running. An explicit logout, or a new
+        # sign-in, bumps the epoch; either way the session this tear-down was
+        # meant for is gone, and telling whoever is here now that their session
+        # expired is exactly the defect reported from manual testing.
+        with self._auth_state_lock:
+            pending = self._session_expired_epoch
+            if pending is None or pending != self._auth_epoch:
+                return
+        # Atomic: the epoch bump and the token clear happen together, so an
+        # in-flight refresh cannot commit in between. The email is deliberately
+        # kept; the user is signing back into the same account.
+        self._clear_session(forget_email=False)
+        self._stop_session_timer()
+        # current_user_email is deliberately NOT cleared, and the remembered
+        # address is deliberately NOT removed: the user is signing back into
+        # the same account, so making them retype it is pure friction.
+        self._clear_session_state()
+        self._update_header_status()
+        self._go_to_signin()
+        self._prefill_remembered_email()
+        self.iface.messageBar().pushMessage(
+            "ATLAS", "Your session expired. Please sign in again.",
+            level=Qgis.MessageLevel.Warning, duration=8)
 
     def _authed_request(self, method: str, url: str, **kwargs):
         """Issue an authenticated request. On 401, transparently refresh the
         access token once and retry, so a mid-session expiry is invisible to
         the user. Bodies here are token-free (json/params/no files), so the
-        retry is safe to repeat. (File uploads handle their own retry.)"""
+        retry is safe to repeat. (File uploads handle their own retry.)
+
+        ⚠️ THE AUTHENTICATION EPOCH IS CAPTURED HERE, BY THE WRAPPER.
+        It used to be every caller's job to pass one to
+        _notify_session_expired, and three call sites simply did not. A balance
+        refresh already in flight when the user pressed Log out came back 401,
+        found no refresh token, read that as a terminal expiry and announced
+        "Your session expired" on top of "Logged out successfully". Capturing
+        the epoch in the one place every authenticated request goes through
+        means a caller cannot forget, and a response that outlives its session
+        can no longer tear down the one that replaced it.
+        """
+        epoch_on_entry = self._current_auth_epoch()
+
         def _send():
             headers = dict(kwargs.get("headers") or {})
             if self.access_token:
@@ -5482,8 +6300,26 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             return requests.request(method, url, **kw)
 
         resp = _send()
-        if resp.status_code == 401 and self._refresh_access_token():
-            resp = _send()
+        if resp.status_code == 401:
+            # Exactly one refresh and exactly one retry. There is no loop here
+            # by construction: _send() is called at most twice per call, and
+            # nothing in this function re-enters it.
+            outcome = self._attempt_refresh()
+            if outcome == self.REFRESH_OK:
+                resp = _send()
+                if resp.status_code == 401:
+                    # A fresh token was rejected too. The session is genuinely
+                    # over; retrying again would just repeat this.
+                    self._notify_session_expired(epoch=epoch_on_entry)
+            elif outcome == self.REFRESH_TERMINAL:
+                self._notify_session_expired(epoch=epoch_on_entry)
+            # STALE: the session changed under this request. The caller gets the
+            # 401 and nothing is torn down, because whatever replaced the
+            # session is now in charge.
+            # TRANSIENT: the refresh could not be attempted cleanly, so the
+            # caller gets the 401 and the session is left intact. Signing the
+            # user out because their wifi dropped is the behaviour being fixed,
+            # not a behaviour to reproduce here.
         return resp
 
     # ── Storage (Phase-1B: tiered storage quota) ──────────────────────────
@@ -5941,6 +6777,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         return specs, temps
 
     def _run_backend_request(self):
+        # ⚠️ CAPTURED BEFORE ANY WORK STARTS. The upload posts its multipart
+        # body directly rather than through _authed_request, so it does not
+        # inherit that wrapper's epoch protection and has to carry its own. An
+        # upload can be in flight for minutes; a logout in the middle of one
+        # must not come back as "your session expired".
+        upload_epoch = self._current_auth_epoch()
         try:
             # Snapshot the file list up front. Cancelling clears
             # self.selected_files on the UI thread (_restart_mission), so this
@@ -6082,11 +6924,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         for fh in fhs:
                             fh.close()
 
+                upload_refresh_outcome = None
                 try:
                     response = _post_register()
                     # If the token expired mid-session, refresh once and retry.
-                    if response.status_code == 401 and self._refresh_access_token():
-                        response = _post_register()
+                    if response.status_code == 401:
+                        upload_refresh_outcome = self._attempt_refresh()
+                        if upload_refresh_outcome == self.REFRESH_OK:
+                            response = _post_register()
                 finally:
                     # Temp downscaled copies are no longer needed after the upload.
                     for tp in temp_paths:
@@ -6096,6 +6941,24 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                             pass
 
                 if response.status_code == 401:
+                    # ⚠️ THIS USED TO BE A BARE `raise`. It showed the right
+                    # words in a Processing error box and then left the plugin
+                    # fully "signed in": tokens still set, header still showing
+                    # the user, polling still running. Every later request 401'd
+                    # and Force Logout was the only way out. That was the defect
+                    # reported from the field.
+                    #
+                    # ⚠️ AND THE TEAR-DOWN IS CONDITIONAL. A 401 here after a
+                    # TRANSIENT refresh failure means "we could not reach the
+                    # auth server", not "your session is over". Ending the
+                    # session on a timeout mid-upload would reintroduce the same
+                    # defect through a different door.
+                    if upload_refresh_outcome in (self.REFRESH_TRANSIENT,
+                                                  self.REFRESH_STALE):
+                        raise Exception(
+                            "Could not reach the server to renew your session. "
+                            "Check your connection and try again.")
+                    self._notify_session_expired(epoch=upload_epoch)
                     raise Exception("Session expired. Please sign in again.")
                 if response.status_code == 402:
                     # the server sends a structured detail so we can guide the user
@@ -7042,8 +7905,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         hl = QtWidgets.QHBoxLayout(row)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(4)
-        l = QtWidgets.QLabel(left)
-        l.setStyleSheet("font-size: 10px; color: #78716c;")
+        left_label = QtWidgets.QLabel(left)
+        left_label.setStyleSheet("font-size: 10px; color: #78716c;")
         r = QtWidgets.QLabel(right)
         # Monospace value, right-aligned -> tabular telemetry readout (QSS can't do
         # tabular-nums; a monospace QFont gives fixed-width digits).
@@ -7051,7 +7914,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         r.setFont(mono)
         r.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         r.setStyleSheet(f"font-size: 11px; color: {right_color}; font-weight: bold;")
-        hl.addWidget(l)
+        hl.addWidget(left_label)
         hl.addStretch()
         hl.addWidget(r)
         return row

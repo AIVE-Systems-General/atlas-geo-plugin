@@ -67,8 +67,21 @@ def dlg(mod, qapp, monkeypatch, tmp_path):
                             staticmethod(lambda *a, **k:
                                          QtWidgets.QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QtWidgets.QDialog, "exec", lambda self, *a, **k: 0)
-    QtCore.QSettings.setPath(QtCore.QSettings.Format.IniFormat,
-                             QtCore.QSettings.Scope.UserScope, str(tmp_path))
+    # ⚠️ QSettings.setPath IS NOT ENOUGH and quietly does nothing.
+    # QSettings(org, app) resolves through NativeFormat while setPath is keyed
+    # BY FORMAT, and Qt caches the resolved file for the process lifetime. These
+    # tests were therefore writing to the real ~/.config/AIVE/AtlasGeo.conf --
+    # the tester's own profile. Replacing the QSettings the plugin constructs is
+    # unambiguous: everything under test goes to a file inside tmp_path.
+    _real_qs = QtCore.QSettings
+    _ini = str(tmp_path / "AtlasGeo.ini")
+
+    def _scoped(*a, **k):
+        return _real_qs(_ini, _real_qs.Format.IniFormat)
+
+    _scoped.Format = _real_qs.Format
+    _scoped.Scope = _real_qs.Scope
+    monkeypatch.setattr(mod.QtCore, "QSettings", _scoped)
 
     class _Iface:
         def __init__(self):
@@ -191,7 +204,10 @@ def test_the_dialog_proposes_a_timestamped_name(mod, dlg, saves, monkeypatch):
     _freeze(monkeypatch, mod, T1)
     dlg.export_report()
     assert saves["proposed"], "the save dialog was never opened"
-    assert saves["proposed"][0] == "ATLAS_Geo_Dock_Report_20260924_174533.pdf"
+    # The proposal is now an absolute path (see the macOS starting-directory
+    # fix); the NAME is what this test is about.
+    assert (os.path.basename(saves["proposed"][0])
+            == "ATLAS_Geo_Dock_Report_20260924_174533.pdf")
 
 
 @needs_qgis

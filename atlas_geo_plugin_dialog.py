@@ -9849,6 +9849,49 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     # YYYYMMDD_HHMMSS at the end of a stem. Used to recognise a name that has
     # already been stamped, so reopening the dialog cannot stamp it twice.
     _REPORT_STAMP_RE = re.compile(r"_\d{8}_\d{6}$")
+    # Longest mission-name component we will put in a filename. The timestamp,
+    # the "_ATLAS_Report" marker and the extension are all still to come, and
+    # some filesystems stop at 255 bytes for one path component.
+    _MISSION_NAME_MAX = 60
+    # Illegal on Windows, and ASCII control characters everywhere.
+    _FILENAME_BAD_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+    # Reserved DEVICE names on Windows. Still reserved with an extension, so
+    # "CON.pdf" is unusable; a component equal to one of these gets an
+    # underscore rather than being thrown away.
+    _WINDOWS_RESERVED = {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+
+    @classmethod
+    def _sanitize_mission_name(cls, name) -> str:
+        """A mission name reduced to something safe in a filename, or "".
+
+        Returning "" means "no usable name", and the caller falls back to the
+        timestamp-only form. That is deliberate: a mission called "///" should
+        produce the ordinary report name, not a file called "___".
+
+        Safe on Windows, macOS and Linux: the Windows illegal set is the
+        strictest of the three, so satisfying it satisfies all of them.
+        """
+        if not name:
+            return ""
+        s = cls._FILENAME_BAD_RE.sub(" ", str(name))
+        # Collapse any run of whitespace, underscores or hyphens into ONE
+        # underscore, so "Austin   Flight -- 01" does not become a wall of
+        # separators.
+        s = re.sub(r"[\s_\-]+", "_", s).strip("_")
+        # Windows silently drops trailing dots and spaces, so a name ending in
+        # one would not round-trip to the file that was actually created.
+        s = s.rstrip(" ._")
+        if not s:
+            return ""
+        if len(s) > cls._MISSION_NAME_MAX:
+            s = s[:cls._MISSION_NAME_MAX].rstrip(" ._")
+        if s.upper() in cls._WINDOWS_RESERVED:
+            s = f"{s}_"
+        return s
 
     @staticmethod
     def _report_timestamp(now=None) -> str:
@@ -9863,17 +9906,89 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         return (now or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
 
     @classmethod
-    def _report_basename(cls, ext: str, now=None, base: str = None) -> str:
-        """ATLAS_Geo_Dock_Report_YYYYMMDD_HHMMSS.ext
+    def _report_basename(cls, ext: str, now=None, base: str = None,
+                         mission=None) -> str:
+        """<Mission>_ATLAS_Report_YYYYMMDD_HHMMSS.ext, or the timestamp-only form.
+
+        With a usable mission name the report is identifiable at a glance in a
+        folder of exports. Without one it keeps the previous name exactly, so
+        nothing depends on the user having filled the field in.
 
         Passing the same `now` for the PDF and the CSV is what keeps one export
         action's two files together. A `base` that already ends in a timestamp
-        is left alone, so a second pass cannot append another.
+        is used as-is, so neither the mission name nor the timestamp can be
+        applied twice.
         """
-        base = base or cls.REPORT_NAME_PREFIX
-        if not cls._REPORT_STAMP_RE.search(base):
-            base = f"{base}_{cls._report_timestamp(now)}"
-        return f"{base}.{ext.lstrip('.')}"
+        if base:
+            stem = base
+        else:
+            safe = cls._sanitize_mission_name(mission)
+            stem = f"{safe}_ATLAS_Report" if safe else cls.REPORT_NAME_PREFIX
+        if not cls._REPORT_STAMP_RE.search(stem):
+            stem = f"{stem}_{cls._report_timestamp(now)}"
+        return f"{stem}.{ext.lstrip('.')}"
+
+    def _current_mission_name(self) -> str:
+        """The mission name the user typed on the Setup page, or "".
+
+        ⚠️ THIS FIELD, AND NOTHING ELSE. Not the job id, not the batch UUID, not
+        the account email, not a directory path and not an image filename: none
+        of those is a name a person chose, and several would leak information
+        into a filename the user may share.
+        """
+        w = getattr(self, "input_mission_name", None)
+        if w is None:
+            return ""
+        try:
+            return w.text().strip()
+        except RuntimeError:
+            return ""              # widget already destroyed
+
+    # ── Remembering where the last report went ───────────────────────────
+    #
+    # Only the DIRECTORY of the most recent SUCCESSFUL export, and only that.
+    # No filename, no account, no report content. It lives in the same
+    # QSettings(org, app) the plugin already uses, so it stays inside the
+    # QGIS profile and a separate profile starts clean.
+    _SETTINGS_REPORT_DIR = "report/last_export_dir"
+
+    @staticmethod
+    def _default_report_dir() -> str:
+        """Where the very first export should open: Documents, else home."""
+        try:
+            loc = QtCore.QStandardPaths.writableLocation(
+                QtCore.QStandardPaths.StandardLocation.DocumentsLocation)
+        except AttributeError:                      # very old Qt enum spelling
+            loc = ""
+        return loc or os.path.expanduser("~")
+
+    @classmethod
+    def _remembered_report_dir(cls) -> str:
+        """The last successful export directory, if it is still usable.
+
+        A remembered directory that has since been deleted, unmounted or made
+        read-only falls back rather than failing. It is NOT recreated: the user
+        removed it, and silently putting it back would be presumptuous.
+        """
+        try:
+            s = QtCore.QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)
+            d = str(s.value(cls._SETTINGS_REPORT_DIR, "") or "")
+        except Exception:                                     # noqa: BLE001
+            d = ""
+        if d and os.path.isdir(d) and os.access(d, os.W_OK):
+            return d
+        return cls._default_report_dir()
+
+    @classmethod
+    def _remember_report_dir(cls, directory: str) -> None:
+        if not directory:
+            return
+        try:
+            s = QtCore.QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)
+            s.setValue(cls._SETTINGS_REPORT_DIR, directory)
+        except Exception as exc:                              # noqa: BLE001
+            _log_nonfatal("could not remember the report directory", exc,
+                          level=_LOG_WARNING)
 
     @staticmethod
     def _non_clobbering_path(path: str) -> str:
@@ -9902,9 +10017,20 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # clock again for the CSV could straddle a second boundary and split a
         # single report across two names.
         export_time = datetime.datetime.now()
+        # ⚠️ AN ABSOLUTE PATH, NOT A BARE FILENAME.
+        #
+        # getSaveFileName treats a bare name as relative to the process working
+        # directory. Windows mostly lands somewhere plausible; the native macOS
+        # panel ignores it and reopens at the user's home folder every time,
+        # which is the behaviour reported. Joining the remembered directory
+        # gives both platforms an unambiguous starting point AND the proposed
+        # filename.
+        proposed = os.path.join(
+            self._remembered_report_dir(),
+            self._report_basename("pdf", export_time,
+                                  mission=self._current_mission_name()))
         save_path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export Report",
-            self._report_basename("pdf", export_time), "PDF Files (*.pdf)")
+            self, "Export Report", proposed, "PDF Files (*.pdf)")
         if not save_path:
             return
 
@@ -10057,6 +10183,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     ])
             # Both files are whole. Only now do they take their real names.
             _commit()
+            # ⚠️ REMEMBERED ONLY AFTER A COMPLETE SUCCESS, and only the
+            # directory. A cancelled dialog never reaches here, and a PDF, CSV
+            # or commit failure jumps to the handler below instead, so a
+            # half-finished export cannot move where the next one opens.
+            self._remember_report_dir(os.path.dirname(os.path.abspath(pdf_path)))
         except Exception as e:
             _discard()
             self._themed_notice("Export failed", f"Could not write report:\n{e}",

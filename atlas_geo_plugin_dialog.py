@@ -9839,6 +9839,58 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         </body></html>
         """
 
+    # ── Report filenames ──────────────────────────────────────────────────
+    #
+    # Every export used to propose the same hard-coded "atlas_report.pdf", so a
+    # second export offered to overwrite the first, and the CSV beside it was
+    # replaced with no prompt at all. The name now carries when the report was
+    # made.
+    REPORT_NAME_PREFIX = "ATLAS_Geo_Dock_Report"
+    # YYYYMMDD_HHMMSS at the end of a stem. Used to recognise a name that has
+    # already been stamped, so reopening the dialog cannot stamp it twice.
+    _REPORT_STAMP_RE = re.compile(r"_\d{8}_\d{6}$")
+
+    @staticmethod
+    def _report_timestamp(now=None) -> str:
+        """Local wall-clock time as YYYYMMDD_HHMMSS.
+
+        Deliberately not ISO 8601: a colon is illegal in a Windows filename and
+        a naive isoformat() would produce one. Only digits and one underscore
+        appear here, which is safe on every filesystem we ship to.
+
+        `now` is injectable so tests can pin the clock instead of sleeping.
+        """
+        return (now or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
+
+    @classmethod
+    def _report_basename(cls, ext: str, now=None, base: str = None) -> str:
+        """ATLAS_Geo_Dock_Report_YYYYMMDD_HHMMSS.ext
+
+        Passing the same `now` for the PDF and the CSV is what keeps one export
+        action's two files together. A `base` that already ends in a timestamp
+        is left alone, so a second pass cannot append another.
+        """
+        base = base or cls.REPORT_NAME_PREFIX
+        if not cls._REPORT_STAMP_RE.search(base):
+            base = f"{base}_{cls._report_timestamp(now)}"
+        return f"{base}.{ext.lstrip('.')}"
+
+    @staticmethod
+    def _non_clobbering_path(path: str) -> str:
+        """`path`, or path_2 / path_3 ... if something is already there.
+
+        For destinations the plugin DERIVES rather than the user choosing. The
+        save dialog confirms an overwrite of the file the user actually picked;
+        nothing ever asked about the CSV written beside it.
+        """
+        if not os.path.exists(path):
+            return path
+        stem, ext = os.path.splitext(path)
+        n = 2
+        while os.path.exists(f"{stem}_{n}{ext}"):
+            n += 1
+        return f"{stem}_{n}{ext}"
+
     def export_report(self):
         if not self._job_results and not self._failed_jobs:
             self._themed_notice("Nothing to export",
@@ -9846,8 +9898,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                                 accent="red", button="OK")
             return
 
+        # ⚠️ ONE timestamp for the whole action, captured here. Reading the
+        # clock again for the CSV could straddle a second boundary and split a
+        # single report across two names.
+        export_time = datetime.datetime.now()
         save_path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export Report", "atlas_report.pdf", "PDF Files (*.pdf)")
+            self, "Export Report",
+            self._report_basename("pdf", export_time), "PDF Files (*.pdf)")
         if not save_path:
             return
 
@@ -9891,6 +9948,36 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             "centre":      centre,
         }
 
+        # ⚠️ WRITTEN TO .part AND RENAMED ON SUCCESS.
+        #
+        # QPrinter and csv.writer both stream straight to their destination, so
+        # a failure partway through used to leave a truncated PDF or CSV sitting
+        # exactly where a complete report belongs, with no indication it was
+        # incomplete. Staging and renaming means the final name only ever
+        # appears once the file is whole; os.replace is atomic within a
+        # filesystem, and the staging file sits beside the target so it is the
+        # same one.
+        staged = []
+
+        def _stage(final_path: str) -> str:
+            tmp = final_path + ".part"
+            staged.append((tmp, final_path))
+            return tmp
+
+        def _commit():
+            for tmp, final in staged:
+                if os.path.exists(tmp):
+                    os.replace(tmp, final)
+
+        def _discard():
+            for tmp, _final in staged:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError as exc:
+                    _log_nonfatal("partial report file not cleaned up", exc,
+                                  level=_LOG_WARNING)
+
         try:
             # ── PDF ──
             pdf_path = save_path if save_path.lower().endswith(".pdf") else save_path + ".pdf"
@@ -9910,7 +9997,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # branching on the Qt version.
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(pdf_path)
+            printer.setOutputFileName(_stage(pdf_path))
             printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
             try:
                 _layout = printer.pageLayout()
@@ -9947,8 +10034,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             doc.print(printer)
 
             # ── CSV (same per-frame rows, machine-readable) ──
-            csv_path = pdf_path[:-4] + ".csv"
-            with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+            # The stem comes from the PDF the user accepted, so both files of
+            # one export carry the same timestamp. This path is DERIVED and is
+            # never confirmed by the save dialog, so it must not clobber: an
+            # existing CSV keeps its contents and this one takes _2, _3 ...
+            csv_path = self._non_clobbering_path(pdf_path[:-4] + ".csv")
+            with open(_stage(csv_path), "w", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh)
                 w.writerow(["file", "status", "inliers", "tier",
                             "angle_deg", "lat", "lon", "elapsed_s", "reason"])
@@ -9964,7 +10055,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         r["elapsed"] if r["elapsed"] is not None else "",
                         r["reason"],
                     ])
+            # Both files are whole. Only now do they take their real names.
+            _commit()
         except Exception as e:
+            _discard()
             self._themed_notice("Export failed", f"Could not write report:\n{e}",
                                 accent="red", button="Close")
             return

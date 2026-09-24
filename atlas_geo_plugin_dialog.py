@@ -8907,8 +8907,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             len([p for p in self._result_paths if os.path.exists(p)]) > 1)
 
     def _merge_into_mosaic(self):
-        """Merge all per-image result GeoTIFFs into ONE mosaic GeoTIFF and
-        replace the individual layers with that single clean layer.
+        """Merge the per-image result GeoTIFFs into ONE mosaic GeoTIFF and ADD
+        it to the canvas as a single new layer.
+
+        ⚠️ ADDITIVE ONLY. Nothing is deleted, hidden, renamed or reordered: not
+        the source layers, not layers from earlier runs, and certainly not the
+        user's own. The only change to the project is one new layer, so undoing
+        the visible result is simply removing it.
 
         Black (0,0,0) warp borders are treated as nodata so they don't paint
         over neighbouring imagery. Geometry is unchanged — this is presentation
@@ -8953,12 +8958,38 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                                 accent="red", button="Close")
             return
 
-        # Replace the individual result layers with the single mosaic layer.
+        # ⚠️ NOTHING IS DELETED HERE. THIS OPERATION IS PURELY ADDITIVE.
+        #
+        # This block used to be:
+        #
+        #     for lyr in list(proj.mapLayers().values()):
+        #         if lyr.name().startswith("ATLAS"):
+        #             proj.removeMapLayer(lyr.id())
+        #
+        # which walked the ENTIRE project and destroyed every layer whose
+        # DISPLAY NAME began with "ATLAS". Three faults in four lines:
+        #
+        #   * it matched on a name the user controls, so somebody's own
+        #     "ATLAS survey 2024" was deleted along with our results;
+        #   * it was scoped to the whole project rather than to this merge's
+        #     inputs, so layers from earlier runs and other work went too;
+        #   * QgsProject.removeMapLayer is NOT on the QGIS undo stack. Ctrl+Z
+        #     covers edits inside a vector layer, not project membership, so
+        #     none of it could be undone.
+        #
+        # It also ran BEFORE the output was loaded and validated, so a mosaic
+        # that failed to open left the user with neither their layers nor a
+        # result.
+        #
+        # The mosaic is a presentation convenience. The sources it was built
+        # from are the user's data and are left exactly where they are; anyone
+        # who wants a tidier canvas can hide or remove them themselves, which
+        # is a reversible act. Removing the single new layer below returns the
+        # canvas to precisely its previous state.
         proj = QgsProject.instance()
-        for lyr in list(proj.mapLayers().values()):
-            if lyr.name().startswith("ATLAS"):
-                proj.removeMapLayer(lyr.id())
 
+        # Built and validated BEFORE the project is touched, so a mosaic that
+        # cannot be loaded changes nothing at all.
         layer = QgsRasterLayer(out, "ATLAS Mosaic")
         if not layer.isValid():
             self._themed_notice(
@@ -8966,6 +8997,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 icon="⚠", accent="orange", button="OK")
             return
 
+        # The one and only mutation this operation makes to the project.
         proj.addMapLayer(layer)
         try:   # black borders -> transparent (same as the per-image layers)
             rt = layer.renderer().rasterTransparency()
@@ -8990,7 +9022,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             b.setText("✓  Merged into mosaic")
         self._themed_notice(
             "Mosaic created",
-            f"Merged {len(paths)} layers into one mosaic and added it to the canvas.\n\n"
+            f"Merged {len(paths)} layers into one mosaic and added it to the "
+            f"canvas as a new layer.\n\n"
+            f"The original layers are untouched. Hide or remove them yourself "
+            f"if you want a cleaner canvas, and remove the mosaic layer to "
+            f"undo this.\n\n"
             f"Saved to:\n{os.path.basename(out)}",
             accent="green", button="Done", primary_button=True)
 

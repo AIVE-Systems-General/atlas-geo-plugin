@@ -45,6 +45,14 @@ from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QPixmap, QColor
 from qgis.core import QgsProject, QgsRasterLayer
 from qgis.core import Qgis, QgsMessageLog
+# ⚠️ QgsSettings, NOT QSettings, for anything that must follow the PROFILE.
+# Measured on QGIS 3.44.14, 4.2.1 and 4.2.2:
+#   QSettings("AIVE", "AtlasGeo") -> ~/.config/AIVE/AtlasGeo.conf
+#       the same file for every profile, unaffected by QGIS_CUSTOM_CONFIG_PATH
+#   QgsSettings()                 -> <profile dir>/Unknown Organization.ini
+#       one file per profile
+# A value written through QSettings in one profile is readable from another.
+from qgis.core import QgsSettings
 
 # GDAL's identity geotransform, returned when a file carries no georeferencing.
 _GDAL_IDENTITY_GT = (0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
@@ -9947,10 +9955,26 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     # ── Remembering where the last report went ───────────────────────────
     #
     # Only the DIRECTORY of the most recent SUCCESSFUL export, and only that.
-    # No filename, no account, no report content. It lives in the same
-    # QSettings(org, app) the plugin already uses, so it stays inside the
-    # QGIS profile and a separate profile starts clean.
-    _SETTINGS_REPORT_DIR = "report/last_export_dir"
+    # No filename, no account, no report content.
+    #
+    # ⚠️ STORED THROUGH QgsSettings, NOT QSettings(org, app).
+    #
+    # An earlier version of this used the plugin's existing
+    # QSettings("AIVE", "AtlasGeo") on the assumption that it was
+    # profile-scoped. It is not. Measured on all three supported QGIS versions,
+    # that object resolves to ~/.config/AIVE/AtlasGeo.conf (or the registry /
+    # global plist equivalent) and is IDENTICAL in every profile: a directory
+    # written while working in one profile was readable from another.
+    #
+    # QgsSettings is backed by the active profile directory, so each profile
+    # keeps its own value and a new profile starts on the standard fallback.
+    # The key is namespaced to this plugin so it cannot collide with QGIS's own
+    # settings or another plugin's.
+    #
+    # Only this new preference moves. The existing auth/email settings stay on
+    # QSettings exactly where they are; migrating them is a separate decision
+    # and is deliberately not bundled into this change.
+    _SETTINGS_REPORT_DIR = "atlas_geo_plugin/report/last_export_dir"
 
     @staticmethod
     def _default_report_dir() -> str:
@@ -9971,8 +9995,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         removed it, and silently putting it back would be presumptuous.
         """
         try:
-            s = QtCore.QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)
-            d = str(s.value(cls._SETTINGS_REPORT_DIR, "") or "")
+            d = str(QgsSettings().value(cls._SETTINGS_REPORT_DIR, "") or "")
         except Exception:                                     # noqa: BLE001
             d = ""
         if d and os.path.isdir(d) and os.access(d, os.W_OK):
@@ -9984,8 +10007,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         if not directory:
             return
         try:
-            s = QtCore.QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)
-            s.setValue(cls._SETTINGS_REPORT_DIR, directory)
+            QgsSettings().setValue(cls._SETTINGS_REPORT_DIR, directory)
         except Exception as exc:                              # noqa: BLE001
             _log_nonfatal("could not remember the report directory", exc,
                           level=_LOG_WARNING)

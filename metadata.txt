@@ -3,13 +3,32 @@ name=ATLAS Geo-Dock
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.2.99
 description=QGIS integrated plugin for UAV Pose Estimation and UAV-to-Map Registration with batch processing and advanced alignment options
-version=1.1.3
+version=1.1.4-rc1
 author=AIVE AI Systems
 email=luis.sentis@aivesystems.com
 about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. DEPENDENCIES: none beyond a standard QGIS installation. The plugin uses the GDAL and Qt libraries QGIS already ships.
 tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
 repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
 changelog=
+    Version 1.1.4-rc1 - internal validation build. You can now select up to
+    100 images in one submission instead of 10. They are uploaded in small
+    groups so one slow or failed request affects only that group, and
+    progress is shown across the whole selection. Before the first image is
+    uploaded the plugin checks your available credits against the number
+    selected and stops straight away if there are not enough, showing both
+    figures. If a group is declined partway through, the images already
+    accepted keep processing and you are told how many were submitted and how
+    many were not. If a group is interrupted by a timeout or a lost
+    connection those images are reported as unconfirmed rather than as not
+    submitted, because they may already have been accepted; they are not sent
+    again automatically, and you are asked to check your jobs and balance
+    first. Merging results into a single mosaic now only ADDS the mosaic
+    layer: your other layers, including the images it was built from, are
+    left exactly as they were, and removing the mosaic layer undoes it.
+    Exported reports are named after the mission where you have given one,
+    with the date and time of the export, so a second report no longer
+    replaces the first; without a mission name the date and time are still
+    used. The save window reopens in the folder you last saved a report to.
     Version 1.1.3 - Session reliability and a QGIS 4 dialog fix. The plugin
     now renews the session before the normal idle timeout, so leaving QGIS
     unused for the previously failing period no longer causes an unexpected

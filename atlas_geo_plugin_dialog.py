@@ -600,11 +600,46 @@ TILE_SESSION_URL   = f"{TILES_BASE_URL.rstrip('/')}/tiles/session"
 # Chunked upload: images sent per /register call. Every chunk of one selection shares
 # ONE batch_id (the first chunk creates it, the rest reuse it) so the consecutive-fail
 # guard AND cancel span the whole batch. Must be <= the server's batch limit.
-# Images per upload request. 50 put ~419 MB of DJI frames in a single POST and
-# left the whole chunk to fail together on a slow link; 20 is ~168 MB, completes
-# in a third of the time, gives the user visible progress sooner, and limits how
-# much has to be retried when a request does fail.
-UPLOAD_CHUNK_SIZE  = int(os.getenv("ATLAS_UPLOAD_CHUNK", "20"))
+# Images per upload request.
+#
+# ⚠️ HARD-CAPPED AT 10, AND NOT MERELY BY THE DEFAULT.
+#
+# The server's own code default is MAX_BATCH=10, and above it /register answers
+# 400 "Batch too large". Deployed manifests currently carry 50, but a number
+# that is only true in a manifest is not a number a client may rely on: if that
+# environment variable is ever unset the server falls back to 10 and every
+# oversized chunk is refused. Ten is correct against BOTH configurations.
+#
+# This became load-bearing the moment the selection limit rose. At a cap of 10
+# images there was only ever ONE chunk, so a chunk size of 20 could not be
+# reached and the mismatch was invisible. A 100-image selection would have sent
+# chunks of 20 into a server defaulting to 10 and failed on the first request.
+#
+# The environment variable may LOWER this for testing; it can never raise it.
+class ChunkRefused(Exception):
+    """The server answered authoritatively and created NO jobs.
+
+    Insufficient credits, a validation failure, a batch that is too large,
+    an authenticated rejection, a rate/queue/disk refusal: in every case the
+    API answered before doing any work, so those images were definitely not
+    submitted and may be re-selected safely.
+    """
+
+
+class ChunkUnknown(Exception):
+    """We do not know whether the server created jobs for this chunk.
+
+    ⚠️ THE DIFFERENCE IS NOT COSMETIC. A timeout, a reset connection or a
+    5xx can all arrive AFTER the server accepted the chunk and reserved
+    credits. Reporting those images as "not submitted" tells the user to
+    send them again, which would create a second set of jobs and charge for
+    them twice. Unknown is its own outcome and must be reported as such.
+    """
+
+
+UPLOAD_CHUNK_LIMIT = 10
+UPLOAD_CHUNK_SIZE = max(1, min(int(os.getenv("ATLAS_UPLOAD_CHUNK", "10")),
+                               UPLOAD_CHUNK_LIMIT))
 
 # Client-side upload optimisation: downscale each image's long edge to this many
 # pixels and re-encode JPEG before upload. GPS/yaw/altitude are extracted from
@@ -616,12 +651,18 @@ UPLOAD_CHUNK_SIZE  = int(os.getenv("ATLAS_UPLOAD_CHUNK", "20"))
 UPLOAD_MAX_EDGE     = int(os.getenv("ATLAS_UPLOAD_MAX_EDGE", "2048"))
 UPLOAD_JPEG_QUALITY = int(os.getenv("ATLAS_UPLOAD_JPEG_QUALITY", "85"))
 
-# Product limit for this release: at most 10 images in one submission. It is
+# Product limit for this release: at most 100 images in one submission. It is
 # separate from the account's image allowance, which the server enforces. A
 # constant rather than an environment override, so every entry point applies
 # the same number. The server does not enforce this limit per submission.
-MAX_IMAGES_PER_SUBMISSION = 10
-MAX_IMAGES_MESSAGE = "Maximum 10 images per submission."
+#
+# 100 is a SELECTION limit, not a request limit: the upload is still sent as
+# bounded chunks of UPLOAD_CHUNK_SIZE, so the user experiences one logical
+# submission while the server only ever sees requests it is configured to
+# accept. Full resumable support for thousand-image flights is NOT implied;
+# an interrupted upload does not resume after QGIS restarts.
+MAX_IMAGES_PER_SUBMISSION = 100
+MAX_IMAGES_MESSAGE = f"Maximum {MAX_IMAGES_PER_SUBMISSION} images per submission."
 
 # ISO 3166-1 countries for the signup dropdown.
 #
@@ -5291,7 +5332,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _browse_files(self):
         filenames, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Select UAV Images (Maximum 10 images per submission)", "",
+            self, f"Select UAV Images ({MAX_IMAGES_MESSAGE.rstrip('.')})", "",
             "Drone images with GPS (*.jpg *.jpeg *.tif *.tiff *.geotiff);;All files (*.*)"
         )
         if not filenames:
@@ -5322,7 +5363,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self._load_image_list(found, source_folder=folder)
 
     def _load_image_list(self, filenames: list, source_folder: str = None):
-        # Refused whole, never trimmed: silently keeping the first ten would
+        # Refused whole, never trimmed: silently keeping the first hundred would
         # submit a set of images the user did not choose. Checked before any
         # metadata is read, and any earlier selection is left as it was.
         if len(filenames) > MAX_IMAGES_PER_SUBMISSION:
@@ -5330,7 +5371,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             self._themed_notice(
                 "Too many images",
                 f"{where} {len(filenames)} images. {MAX_IMAGES_MESSAGE}\n\n"
-                "Choose 10 or fewer images and try again.",
+                f"Choose {MAX_IMAGES_PER_SUBMISSION} or fewer images and try again.",
                 accent="red", button="OK")
             return
 
@@ -5630,7 +5671,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 "Too many images",
                 f"{len(self.selected_files)} images are selected. "
                 f"{MAX_IMAGES_MESSAGE}\n\n"
-                "Choose 10 or fewer images and try again.",
+                f"Choose {MAX_IMAGES_PER_SUBMISSION} or fewer images and try again.",
                 accent="red", button="OK")
             return
         self._style_processing_page()
@@ -6776,6 +6817,149 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             specs.append((orig_name, send_path))
         return specs, temps
 
+    # ── Credit pre-check ──────────────────────────────────────────────────
+    #
+    # Outcomes of the pre-submission balance comparison. The SERVER remains the
+    # authority: it validates and reserves credits atomically per chunk. This
+    # check exists only so that a user who cannot possibly have enough credits
+    # learns that before a single byte is uploaded, instead of after four chunks
+    # have already been sent and charged.
+    CREDITS_OK = "ok"
+    CREDITS_SHORT = "short"
+    CREDITS_UNKNOWN = "unknown"
+
+    def _credit_precheck(self, needed: int):
+        """Return (outcome, needed, available). Runs OFF the GUI thread.
+
+        ⚠️ AN UNREADABLE BALANCE IS NOT A REFUSAL. Failing closed here would
+        block every submission whenever the billing endpoint is briefly
+        unavailable, for no safety gain: the server refuses the reservation
+        anyway if the credits genuinely are not there. Advisory checks that can
+        strand a paying user on a transient 500 are worse than no check.
+        """
+        bal = self._fetch_balance()
+        if not bal:
+            return (self.CREDITS_UNKNOWN, needed, None)
+        available = bal.get("available_tokens")
+        if available is None:
+            available = (int(bal.get("subscription_tokens") or 0)
+                         + int(bal.get("purchased_tokens") or 0))
+        try:
+            available = int(available)
+        except (TypeError, ValueError):
+            return (self.CREDITS_UNKNOWN, needed, None)
+        if available < needed:
+            return (self.CREDITS_SHORT, needed, available)
+        return (self.CREDITS_OK, needed, available)
+
+    def _insufficient_credits_message(self, needed, available) -> str:
+        """One wording for the pre-check and the server's own refusal.
+
+        On a Free-only build the purchase path does not exist, so the copy must
+        not send the user looking for a Buy Credits button this build removes.
+        """
+        head = (f"This submission needs {needed} images and you have "
+                f"{available} left.")
+        if not SHOW_PAYG:
+            return (f"{head} Your included images renew at the start of your "
+                    f"next cycle. If you need more before then, contact "
+                    f"sales@aivesystems.com.")
+        return (f"{head} Tap 'Buy Credits' or 'View Plans' to top up, then try "
+                f"again.")
+
+    # ── Aggregate progress across the whole selection ─────────────────────
+    def _reset_submission_progress(self, total: int):
+        """Counters that describe the SELECTION, not the chunk in flight."""
+        self._submission = {
+            "total": int(total), "submitted": 0, "accepted": 0,
+            "not_submitted": int(total),
+            # Images whose fate we genuinely do not know: the request may have
+            # been accepted before the reply was lost. Never merged into either
+            # certain bucket.
+            "unknown": 0,
+            "chunks_total": 0, "chunks_done": 0,
+            "stopped_reason": None,
+        }
+
+    @QtCore.pyqtSlot(int, int)
+    def _set_submission_progress(self, submitted: int, total: int):
+        """GUI thread only. Shows submission progress across every chunk.
+
+        Without this a 100-image selection looks frozen: ten sequential
+        requests with nothing moving between them.
+        """
+        lbl = getattr(self, "label_frame_counter", None)
+        if lbl is not None:
+            try:
+                lbl.setText(f"Submitting {submitted}/{total}")
+            except RuntimeError:
+                pass          # widget already destroyed during teardown
+        try:
+            self._rebuild_processing_stats(0, total)
+        except (RuntimeError, AttributeError):
+            pass
+
+    @QtCore.pyqtSlot(int, int, int, int, str)
+    def _warn_partial_submission(self, submitted: int, not_submitted: int,
+                                 unknown: int, total: int, reason: str):
+        """Report the three totals separately. GUI thread only.
+
+        ⚠️ UNKNOWN IS NOT "NOT SUBMITTED". Telling someone that images were not
+        submitted when the server may already have accepted and charged for them
+        invites a resubmission that duplicates the jobs and the charge. When any
+        image is in doubt the user is told to check before re-sending anything.
+        """
+        parts = [f"{submitted} of {total} images were submitted and are "
+                 f"processing."]
+        if not_submitted:
+            parts.append(f"{not_submitted} were not submitted.")
+        if unknown:
+            parts.append(
+                f"{unknown} could not be confirmed either way: the connection "
+                f"failed after they were sent, so they may already be "
+                f"processing. Check your jobs and your balance before sending "
+                f"those images again.")
+        parts.append(self._clean_server_text(reason))
+        self.iface.messageBar().pushMessage(
+            "ATLAS", " ".join(parts),
+            level=Qgis.MessageLevel.Warning,
+            duration=20 if unknown else 12)
+
+    def _recover_unknown_chunk(self, batch_id):
+        """Try to learn whether an ambiguous chunk's jobs were created.
+
+        Returns the recovered job ids, or [] when the outcome cannot be
+        established. Never raises: a failed recovery must leave the run in the
+        honest "unknown" state, not turn into a second error.
+
+        ⚠️ THIS CANNOT SUCCEED AGAINST TODAY'S API, AND THAT IS THE POINT OF
+        HAVING IT HERE RATHER THAN PRETENDING OTHERWISE.
+
+        The service exposes GET /status/{job_id} and POST /status/batch, and
+        BOTH are keyed by job id. The job ids for this chunk are exactly what
+        the lost reply contained, so there is nothing to look them up with.
+        /cancel accepts a batch_id but only cancels; no endpoint lists the jobs
+        belonging to a batch.
+
+        Resolving this needs a server change — a batch-scoped lookup, or an
+        idempotency key on /register so the chunk could be safely re-sent. That
+        change belongs to bridge_api.py, which is owned by another in-flight
+        workstream and must not be touched here. Until then the honest outcome
+        is "unknown", which is what the caller reports.
+        """
+        if not batch_id:
+            return []
+        hook = getattr(self, "_batch_jobs_lookup", None)
+        if hook is None:
+            return []                    # no such API today; see the note above
+        try:
+            ids = hook(batch_id) or []
+        except Exception as exc:                              # noqa: BLE001
+            _log_nonfatal("could not resolve an ambiguous chunk from its batch",
+                          exc, level=_LOG_WARNING)
+            return []
+        return [str(j) for j in ids]
+
     def _run_backend_request(self):
         # ⚠️ CAPTURED BEFORE ANY WORK STARTS. The upload posts its multipart
         # body directly rather than through _authed_request, so it does not
@@ -6791,6 +6975,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             selected_files = list(self.selected_files)
             if not selected_files:
                 return
+            self._reset_submission_progress(len(selected_files))
+
+            # ── Step 0: credit pre-check, before a single byte is uploaded ──
+            outcome, needed, available = self._credit_precheck(len(selected_files))
+            if outcome == self.CREDITS_SHORT:
+                raise Exception(self._insufficient_credits_message(needed, available))
 
             self.progress_updated.emit(10, 0)
 
@@ -6955,11 +7145,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     # defect through a different door.
                     if upload_refresh_outcome in (self.REFRESH_TRANSIENT,
                                                   self.REFRESH_STALE):
-                        raise Exception(
+                        raise ChunkRefused(
                             "Could not reach the server to renew your session. "
                             "Check your connection and try again.")
                     self._notify_session_expired(epoch=upload_epoch)
-                    raise Exception("Session expired. Please sign in again.")
+                    raise ChunkRefused("Session expired. Please sign in again.")
                 if response.status_code == 402:
                     # the server sends a structured detail so we can guide the user
                     # correctly: out-of-credits vs. a paused (failed-payment) subscription.
@@ -6972,7 +7162,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         # Not JSON, or not an object: generic message below.
                         info = {}
                     if info.get("code") == "SUBSCRIPTION_PAUSED":
-                        raise Exception(info.get("message") or
+                        raise ChunkRefused(info.get("message") or
                             "Your subscription is paused due to a failed payment. Open "
                             "'View Plans → Manage billing' to update your card, then try again.")
                     need, have = info.get("needed"), info.get("available")
@@ -6987,15 +7177,15 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                                  "next cycle. If you need more before then, contact "
                                  "sales@aivesystems.com.")
                         if need is not None and have is not None:
-                            raise Exception(
+                            raise ChunkRefused(
                                 f"This batch needs {need} images and you have {have} "
                                 f"left. {renew}")
-                        raise Exception(
+                        raise ChunkRefused(
                             f"You have used all of your included images. {renew}")
                     if need is not None and have is not None:
-                        raise Exception(f"Not enough credits: this batch needs {need}, you have {have}. "
-                                        "Tap 'Buy Credits' or 'View Plans' to top up, then try again.")
-                    raise Exception(info.get("message") or
+                        raise ChunkRefused(f"Not enough credits: this batch needs {need}, you have {have}. "
+                                           "Tap 'Buy Credits' or 'View Plans' to top up, then try again.")
+                    raise ChunkRefused(info.get("message") or
                         "You're out of credits. Tap 'Buy Credits' on the previous "
                         "screen to top up, then try again.")
                 if response.status_code == 413:
@@ -7009,10 +7199,10 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         # Not JSON, or not an object: generic message below.
                         detail = None
                     if isinstance(detail, dict) and detail.get("code") == "STORAGE_QUOTA_EXCEEDED":
-                        raise Exception(detail.get("message") or
+                        raise ChunkRefused(detail.get("message") or
                             "This upload would exceed your storage quota. Open the account "
                             "menu → 'Free up storage' to remove your oldest data, then try again.")
-                    raise Exception(detail if isinstance(detail, str) and detail else
+                    raise ChunkRefused(detail if isinstance(detail, str) and detail else
                         "A file is too large to upload. Please reduce file sizes and try again.")
                 if response.status_code == 429:
                     # Server shed load (queue backpressure or per-user rate limit).
@@ -7020,7 +7210,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         detail = response.json().get("detail")
                     except Exception:
                         detail = None
-                    raise Exception(detail or
+                    raise ChunkRefused(detail or
                         "The processing service is busy right now. Please wait a moment and try again.")
                 if response.status_code == 507:
                     # Shared storage nearly full — disk guard.
@@ -7028,36 +7218,149 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                         detail = response.json().get("detail")
                     except Exception:
                         detail = None
-                    raise Exception(detail or
+                    raise ChunkRefused(detail or
                         "Server storage is temporarily full. Please try again a little later.")
                 if response.status_code not in (200, 202):
-                    raise Exception(f"Backend error {response.status_code}: {response.text}")
+                    # ⚠️ 5xx IS NOT A REFUSAL. The server may have accepted the
+                    # chunk and failed afterwards, so the jobs can exist. Only a
+                    # 4xx proves it answered before doing any work.
+                    if response.status_code >= 500:
+                        raise ChunkUnknown(
+                            f"The server reported an error ({response.status_code}) "
+                            f"after receiving these images.")
+                    raise ChunkRefused(
+                        f"Backend error {response.status_code}: {response.text}")
 
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    # A success we cannot read. The jobs were probably created;
+                    # we simply cannot learn their ids.
+                    raise ChunkUnknown(
+                        "The server accepted these images but its reply could "
+                        "not be read.")
                 chunk_ids = result.get("job_ids", [])
                 if not chunk_ids:
-                    raise Exception("No job IDs returned from backend")
+                    raise ChunkUnknown("The server did not return job IDs for "
+                                       "these images.")
                 if not self._batch_id:
                     self._batch_id = result.get("batch_id")   # first chunk defines the batch
                 return chunk_ids
 
-            # Upload every chunk under one batch_id; on any mid-upload failure abort the
-            # partial batch so the chunks already queued are skipped + their credits refunded.
+            # ── Step 2b: submit every chunk under ONE batch_id ─────────────
+            #
+            # ⚠️ A FAILED LATER CHUNK NO LONGER DISCARDS THE ACCEPTED ONES.
+            #
+            # This used to cancel the whole batch on any mid-upload failure, so
+            # one rejected chunk threw away work the server had already accepted
+            # and started. At a 10-image cap that was almost unreachable: there
+            # was a single chunk, so "abort the partial batch" meant "abort the
+            # only chunk". At 100 images it would routinely destroy up to 90
+            # accepted images because the last request was refused.
+            #
+            # The rule now distinguishes WHO stopped the run:
+            #
+            #   user cancellation  -> existing behaviour, jobs already created
+            #                         are cancelled and refunded, because the
+            #                         user asked for exactly that;
+            #   chunk rejection    -> stop sending, KEEP what was accepted, and
+            #                         report the split honestly. No rollback: a
+            #                         job the server has started is not ours to
+            #                         withdraw, and refunding it would take back
+            #                         work the user is about to receive.
+            #
+            # Nothing is resubmitted automatically. /register has no idempotency
+            # key, so a retry after an ambiguous response could create a second
+            # set of jobs and charge for them twice.
             self._batch_id = None
             job_ids = []
-            try:
-                for _start in range(0, len(selected_files), UPLOAD_CHUNK_SIZE):
-                    if self._cancel_flag.is_set():
-                        self.processing_cancelled.emit()
-                        return
-                    job_ids.extend(_register_chunk(
-                        selected_files[_start:_start + UPLOAD_CHUNK_SIZE],
-                        per_image_meta[_start:_start + UPLOAD_CHUNK_SIZE],
-                    ))
-            except Exception:
-                if self._batch_id and job_ids:
-                    self._cancel_batch_backend()   # refund the chunks already queued
-                raise
+            submit_error = None
+            chunk_starts = list(range(0, len(selected_files), UPLOAD_CHUNK_SIZE))
+            self._submission["chunks_total"] = len(chunk_starts)
+
+            for _start in chunk_starts:
+                if self._cancel_flag.is_set():
+                    # User cancellation keeps the ESTABLISHED behaviour for jobs
+                    # the server already created.
+                    self._submission["stopped_reason"] = "cancelled"
+                    if self._batch_id and job_ids:
+                        self._cancel_batch_backend()
+                    self.processing_cancelled.emit()
+                    return
+                _files = selected_files[_start:_start + UPLOAD_CHUNK_SIZE]
+                _meta = per_image_meta[_start:_start + UPLOAD_CHUNK_SIZE]
+                try:
+                    job_ids.extend(_register_chunk(_files, _meta))
+                except ChunkRefused as exc:
+                    # The server answered before creating anything, so these
+                    # images were definitely not submitted and can be re-sent.
+                    submit_error = exc
+                    self._submission["stopped_reason"] = "refused"
+                    break
+                except (ChunkUnknown, requests.RequestException) as exc:
+                    # ⚠️ WE DO NOT KNOW WHETHER THESE IMAGES WERE ACCEPTED.
+                    #
+                    # A timeout, a reset connection or a 5xx can arrive AFTER the
+                    # server took the chunk and reserved credits. Calling them
+                    # "not submitted" would invite a resubmission that creates a
+                    # second set of jobs and charges for them twice.
+                    submit_error = exc
+                    self._submission["stopped_reason"] = "unknown"
+                    self._submission["unknown"] = len(_files)
+                    recovered = self._recover_unknown_chunk(self._batch_id)
+                    if recovered:
+                        job_ids.extend(recovered)
+                        self._submission["submitted"] += len(_files)
+                        self._submission["unknown"] = 0
+                        self._submission["stopped_reason"] = "recovered"
+                    break
+                self._submission["submitted"] += len(_files)
+                self._submission["accepted"] = len(job_ids)
+                self._submission["not_submitted"] = (
+                    self._submission["total"] - self._submission["submitted"])
+                self._submission["chunks_done"] += 1
+                self._invoke_on_gui(
+                    "_set_submission_progress",
+                    QtCore.Q_ARG(int, self._submission["submitted"]),
+                    QtCore.Q_ARG(int, self._submission["total"]))
+
+            # The three totals always reconcile to the selection size, and the
+            # unknown images are counted as their own category rather than being
+            # folded into either certain one.
+            sub_n = self._submission["submitted"]
+            unk_n = self._submission["unknown"]
+            self._submission["not_submitted"] = max(
+                0, self._submission["total"] - sub_n - unk_n)
+            self._submission["accepted"] = len(job_ids)
+
+            if submit_error is not None and not job_ids and not unk_n:
+                # Nothing accepted and nothing in doubt: the original error is
+                # the whole story.
+                raise submit_error
+
+            if submit_error is not None:
+                _log_nonfatal(
+                    f"submission stopped: {sub_n} submitted, "
+                    f"{self._submission['not_submitted']} not submitted, "
+                    f"{unk_n} unknown, of {self._submission['total']}",
+                    submit_error, level=_LOG_WARNING)
+                if unk_n:
+                    # An ambiguous outcome may have consumed credits. Re-read the
+                    # balance so whatever the user is shown next is the server's
+                    # answer, not a stale local one.
+                    try:
+                        self._fetch_balance()
+                    except Exception as exc:              # noqa: BLE001
+                        _log_nonfatal("balance refresh after an ambiguous "
+                                      "submission failed", exc,
+                                      level=_LOG_WARNING)
+                self._invoke_on_gui(
+                    "_warn_partial_submission",
+                    QtCore.Q_ARG(int, sub_n),
+                    QtCore.Q_ARG(int, self._submission["not_submitted"]),
+                    QtCore.Q_ARG(int, unk_n),
+                    QtCore.Q_ARG(int, self._submission["total"]),
+                    QtCore.Q_ARG(str, str(submit_error)))
 
             self.progress_updated.emit(30, 1)
 

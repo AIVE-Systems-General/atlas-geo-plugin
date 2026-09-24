@@ -74,8 +74,28 @@ def dlg(mod, qapp, monkeypatch, tmp_path):
                             staticmethod(lambda *a, **k:
                                          QtWidgets.QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QtWidgets.QDialog, "exec", lambda self, *a, **k: 0)
-    QtCore.QSettings.setPath(QtCore.QSettings.Format.IniFormat,
-                             QtCore.QSettings.Scope.UserScope, str(tmp_path))
+    # ⚠️ QSettings.setPath DOES NOT REDIRECT QSettings(org, app).
+    #
+    # It is keyed BY FORMAT, and QSettings(org, app) resolves through
+    # NativeFormat; Qt then caches the resolved file for the life of the
+    # process. This call looked like isolation and was writing to the real
+    # ~/.config/AIVE/AtlasGeo.conf -- the tester's own settings. Replacing the
+    # settings object the plugin actually constructs is unambiguous: every read
+    # and write under test lands in tmp_path.
+    _real_qs = QtCore.QSettings
+    _ini = str(tmp_path / "AtlasGeo.ini")
+
+    def _scoped_qsettings(*a, **k):
+        return _real_qs(_ini, _real_qs.Format.IniFormat)
+
+    _scoped_qsettings.Format = _real_qs.Format
+    _scoped_qsettings.Scope = _real_qs.Scope
+    monkeypatch.setattr(mod.QtCore, "QSettings", _scoped_qsettings)
+    if hasattr(mod, "QgsSettings"):
+        monkeypatch.setattr(
+            mod, "QgsSettings",
+            lambda *a, **k: _real_qs(str(tmp_path / "AtlasGeo-profile.ini"),
+                                     _real_qs.Format.IniFormat))
 
     class _Bar:
         def __init__(self):
@@ -338,7 +358,7 @@ def test_refresh_token_is_never_written_to_settings(mod, dlg):
     dlg.current_user_email = "a@example.invalid"
     dlg._save_remembered_email()
 
-    s = QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
+    s = mod.QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
     for key in s.allKeys():
         assert "SUPER-SECRET-REFRESH" not in str(s.value(key)), \
             f"refresh token leaked into QSettings key {key}"
@@ -351,14 +371,14 @@ def test_legacy_plaintext_token_is_purged(mod, dlg):
     """Anyone upgrading from 1.1.2 still has one on disk. Removing it is part
     of the fix, not just ceasing to write new ones."""
     from qgis.PyQt import QtCore
-    s = QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
+    s = mod.QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
     s.setValue(dlg._SETTINGS_KEY, "left-over-from-1.1.2")
     s.sync()
     assert s.contains(dlg._SETTINGS_KEY)
 
     dlg._purge_legacy_token()
 
-    s2 = QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
+    s2 = mod.QtCore.QSettings(dlg._SETTINGS_ORG, dlg._SETTINGS_APP)
     assert not s2.contains(dlg._SETTINGS_KEY), "legacy token not removed"
 
 

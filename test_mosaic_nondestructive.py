@@ -82,8 +82,28 @@ def dlg(mod, qapp, monkeypatch, tmp_path):
                             staticmethod(lambda *a, **k:
                                          QtWidgets.QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QtWidgets.QDialog, "exec", lambda self, *a, **k: 0)
-    QtCore.QSettings.setPath(QtCore.QSettings.Format.IniFormat,
-                             QtCore.QSettings.Scope.UserScope, str(tmp_path))
+    # ⚠️ QSettings.setPath DOES NOT REDIRECT QSettings(org, app).
+    #
+    # It is keyed BY FORMAT, and QSettings(org, app) resolves through
+    # NativeFormat; Qt then caches the resolved file for the life of the
+    # process. This call looked like isolation while writing to the real
+    # ~/.config/AIVE/AtlasGeo.conf. Replacing the settings objects the plugin
+    # constructs is unambiguous. QgsSettings is covered too: the report
+    # directory is stored there, and it is backed by the QGIS profile.
+    _real_qs = QtCore.QSettings
+    _app_ini = str(tmp_path / "AtlasGeo-app.ini")
+    _prof_ini = str(tmp_path / "AtlasGeo-profile.ini")
+
+    def _scoped_qsettings(*a, **k):
+        return _real_qs(_app_ini, _real_qs.Format.IniFormat)
+
+    _scoped_qsettings.Format = _real_qs.Format
+    _scoped_qsettings.Scope = _real_qs.Scope
+    monkeypatch.setattr(mod.QtCore, "QSettings", _scoped_qsettings)
+    if hasattr(mod, "QgsSettings"):
+        monkeypatch.setattr(
+            mod, "QgsSettings",
+            lambda *a, **k: _real_qs(_prof_ini, _real_qs.Format.IniFormat))
 
     class _Iface:
         def __init__(self):

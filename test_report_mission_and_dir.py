@@ -63,35 +63,37 @@ class _Bar:
 
 @pytest.fixture
 def profile(mod, qapp, tmp_path, monkeypatch):
-    """Point the PLUGIN's settings at a file inside tmp_path.
+    """Point the PLUGIN's profile-backed settings at a file inside tmp_path.
 
-    ⚠️ QSettings.setPath IS NOT ENOUGH, and quietly does nothing here.
-    QSettings(org, app) resolves through NativeFormat, setPath is keyed by
-    format, and Qt caches the resolved file for the life of the process. In
-    practice these tests were writing to the real ~/.config/AIVE/AtlasGeo.conf
-    -- the tester's own profile, which they must never touch.
+    The report directory is stored through QgsSettings, which is backed by the
+    ACTIVE QGIS PROFILE directory. One profile is one settings file, so a test
+    profile is modelled as its own file here.
 
-    Replacing the QSettings the plugin constructs is unambiguous: every read
-    and write under test goes to a file in tmp_path and nowhere else. Real
-    profile scoping is QGIS's job, not the plugin's; what the plugin owes is to
-    use the profile-scoped org/app namespace, which the tests below check.
+    ⚠️ QSettings.setPath would not do this. It is keyed by format, does not
+    affect QSettings(org, app), and Qt caches the resolved file for the life of
+    the process -- which is how these tests spent several checkpoints writing to
+    the tester's real ~/.config/AIVE/AtlasGeo.conf while appearing isolated.
     """
     from qgis.PyQt import QtCore
-    ini = tmp_path / "profile" / "AtlasGeo.ini"
+    ini = tmp_path / "profile" / "AtlasGeo-profile.ini"
     ini.parent.mkdir(parents=True, exist_ok=True)
-    # Captured BEFORE patching: mod.QtCore is the same module object every
-    # caller sees, so replacing the name would also break QSettings.Format
-    # lookups inside this very factory.
     real = QtCore.QSettings
 
-    def _scoped(*a, **k):
+    def _profile_settings(*a, **k):
         return real(str(ini), real.Format.IniFormat)
 
-    _scoped.Format = real.Format
-    _scoped.Scope = real.Scope
-    _scoped.setPath = real.setPath
-    _scoped.setDefaultFormat = real.setDefaultFormat
-    monkeypatch.setattr(mod.QtCore, "QSettings", _scoped)
+    # The report directory goes through QgsSettings...
+    monkeypatch.setattr(mod, "QgsSettings", _profile_settings)
+    # ...and the plugin's other settings (auth/email) stay on QSettings, which
+    # is redirected too so no test can reach the real file either way.
+    other = tmp_path / "profile" / "AtlasGeo-app.ini"
+
+    def _app_settings(*a, **k):
+        return real(str(other), real.Format.IniFormat)
+
+    _app_settings.Format = real.Format
+    _app_settings.Scope = real.Scope
+    monkeypatch.setattr(mod.QtCore, "QSettings", _app_settings)
     return ini
 
 
@@ -339,9 +341,7 @@ def test_a_cancelled_export_does_not_change_the_remembered_directory(
     dlg.export_report()                      # establishes tmp_path/out
     saves["cancel"] = True
     dlg.export_report()
-    s = QtCore.QSettings(mod.AtlasGeoHandlerDemoDialog._SETTINGS_ORG,
-                         mod.AtlasGeoHandlerDemoDialog._SETTINGS_APP)
-    assert s.value(mod.AtlasGeoHandlerDemoDialog._SETTINGS_REPORT_DIR) == \
+    assert mod.AtlasGeoHandlerDemoDialog._remembered_report_dir() == \
         str(tmp_path / "out")
 
 
@@ -358,9 +358,7 @@ def test_a_failed_export_does_not_change_the_remembered_directory(
     monkeypatch.setattr(_csv, "writer",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope")))
     dlg.export_report()
-    s = QtCore.QSettings(mod.AtlasGeoHandlerDemoDialog._SETTINGS_ORG,
-                         mod.AtlasGeoHandlerDemoDialog._SETTINGS_APP)
-    assert s.value(mod.AtlasGeoHandlerDemoDialog._SETTINGS_REPORT_DIR) == \
+    assert mod.AtlasGeoHandlerDemoDialog._remembered_report_dir() == \
         str(tmp_path / "out"), "a failed export moved the remembered directory"
 
 
@@ -390,52 +388,80 @@ def test_a_missing_remembered_directory_is_not_recreated(
 
 
 @needs_qgis
-def test_the_setting_is_profile_scoped_and_not_shared(mod, qapp, tmp_path,
-                                                      monkeypatch):
-    """Two profiles keep independent values.
+def test_two_profiles_do_not_share_the_remembered_directory(
+        mod, qapp, tmp_path, monkeypatch):
+    """Measured, not assumed.
 
-    A QGIS profile is a separate settings FILE (and, in use, a separate
-    process). What the plugin controls is that it stores through the
-    profile-scoped org/app namespace rather than a global file of its own, so
-    switching profile switches the value. Both halves are asserted here.
+    QSettings("AIVE", "AtlasGeo") resolves to ONE file for every profile
+    (~/.config/AIVE/AtlasGeo.conf on Linux, the registry or a global plist
+    elsewhere), so the first version of this preference WAS shared between
+    profiles. It now goes through QgsSettings, which is backed by the active
+    profile directory. This test writes in one profile and proves the other
+    cannot see it.
     """
     from qgis.PyQt import QtCore
     cls = mod.AtlasGeoHandlerDemoDialog
+    real = QtCore.QSettings
 
-    # 1. the plugin uses the same namespace as its other settings, which is
-    #    what QGIS scopes per profile.
-    assert cls._SETTINGS_ORG == "AIVE" and cls._SETTINGS_APP == "AtlasGeo"
-    assert cls._SETTINGS_REPORT_DIR.startswith("report/")
+    assert cls._SETTINGS_REPORT_DIR == "atlas_geo_plugin/report/last_export_dir"
     src = pathlib.Path(DIALOG).read_text(encoding="utf-8")
-    assert "QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)" in src,         "the report directory must go through the profile-scoped namespace"
+    assert "QgsSettings().setValue(cls._SETTINGS_REPORT_DIR" in src,         "the report directory must be stored through the profile-backed store"
+    assert "QSettings(cls._SETTINGS_ORG, cls._SETTINGS_APP)" not in         src[src.index("_remember_report_dir"):src.index("_remember_report_dir") + 800],         "the report directory must not use the application-wide QSettings"
 
-    # 2. two profiles -> two files -> independent values.
-    ini_a = tmp_path / "A" / "AtlasGeo.ini"
-    ini_b = tmp_path / "B" / "AtlasGeo.ini"
-    for i in (ini_a, ini_b):
-        i.parent.mkdir(parents=True, exist_ok=True)
-
-    real = getattr(QtCore.QSettings, "Format", None) and QtCore.QSettings
-    if real is None:                      # already patched by the fixture
-        real = mod.QtCore.QSettings.Format and QtCore.QSettings
+    ini_a = tmp_path / "A.ini"
+    ini_b = tmp_path / "B.ini"
 
     def use(ini):
-        def _f(*a, **k):
-            return real(str(ini), real.Format.IniFormat)
-        _f.Format = real.Format
-        _f.Scope = real.Scope
-        monkeypatch.setattr(mod.QtCore, "QSettings", _f)
+        monkeypatch.setattr(
+            mod, "QgsSettings",
+            lambda *a, **k: real(str(ini), real.Format.IniFormat))
 
     chosen = tmp_path / "chosen"
-    chosen.mkdir()          # must exist, or _remembered_report_dir falls back
+    chosen.mkdir()
+
     use(ini_a)
     cls._remember_report_dir(str(chosen))
     assert cls._remembered_report_dir() == str(chosen)
 
     use(ini_b)
-    assert cls._remembered_report_dir() == cls._default_report_dir(),         "a different profile saw the first profile's directory"
+    assert cls._remembered_report_dir() == cls._default_report_dir(),         "the second profile saw the first profile's directory"
+
+    # ...and going back to the first profile still finds it.
+    use(ini_a)
+    assert cls._remembered_report_dir() == str(chosen)
     assert ini_a.exists() and "last_export_dir" in ini_a.read_text()
     assert not ini_b.exists() or "last_export_dir" not in ini_b.read_text()
+
+
+@needs_qgis
+def test_the_directory_survives_reopening_in_the_same_profile(
+        mod, dlg, saves, monkeypatch, tmp_path, profile):
+    """A new dialog in the same profile still starts where the last one saved."""
+    _freeze(monkeypatch, mod, T1)
+    dlg.export_report()
+    assert mod.AtlasGeoHandlerDemoDialog._remembered_report_dir() ==         str(tmp_path / "out")
+
+    from qgis.PyQt import QtWidgets
+
+    class _Iface:
+        def __init__(self):
+            self._w = QtWidgets.QMainWindow()
+            self._bar = _Bar()
+
+        def mainWindow(self):
+            return self._w
+
+        def messageBar(self):
+            return self._bar
+
+        def mapCanvas(self):
+            return None
+
+    reopened = mod.AtlasGeoHandlerDemoDialog(_Iface())
+    try:
+        assert reopened._remembered_report_dir() == str(tmp_path / "out")
+    finally:
+        reopened.shutdown_session()
 
 
 @needs_qgis

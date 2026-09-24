@@ -3,14 +3,15 @@ name=ATLAS Geo-Dock
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.2.99
 description=QGIS integrated plugin for UAV Pose Estimation and UAV-to-Map Registration with batch processing and advanced alignment options
-version=1.1.4-rc1
+version=1.1.4
 author=AIVE AI Systems
 email=luis.sentis@aivesystems.com
 about=ATLAS Geo-Dock registers UAV imagery to reference maps using AI-powered pose estimation. Features include a 5-step rotation sweep, batch image processing, auto-scaling and interactive preview mapping. HOSTED SERVICE: georeferencing does not run on your machine. The images you select and the results produced are uploaded to and processed by AIVE AI Systems' hosted ATLAS service, so an ATLAS account and a working internet connection are required to use the plugin. AVAILABILITY: this plugin is downloadable worldwide, but access to the ATLAS service is limited to approved jurisdictions, and an account may not be usable outside them. DEPENDENCIES: none beyond a standard QGIS installation. The plugin uses the GDAL and Qt libraries QGIS already ships.
 tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
 repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
 changelog=
-    Version 1.1.4-rc1 - internal validation build. You can now select up to
+    Version 1.1.4 - Larger submissions, non-destructive mosaics and dated
+    report filenames. You can now select up to
     100 images in one submission instead of 10. They are uploaded in small
     groups so one slow or failed request affects only that group, and
     progress is shown across the whole selection. Before the first image is

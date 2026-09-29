@@ -1736,12 +1736,21 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         hint.setStyleSheet("font-size:11.5px; color:#78716c;")
         root.addWidget(hint)
 
-        type(self).PAGE_VERIFY_WAIT = self.stacked_pages.addWidget(page)
+        # ⚠️ PER INSTANCE, NOT ON THE CLASS. Writing this to the class looks
+        # equivalent and is not: the index would persist after the first dialog
+        # was built, so a SECOND dialog in the same QGIS session would find a
+        # non-None index, skip building its own page, and then raise
+        # AttributeError on label_verify_body, which belongs to the first
+        # dialog's widgets. Reopening the plugin is an ordinary thing to do.
+        self.PAGE_VERIFY_WAIT = self.stacked_pages.addWidget(page)
         return page
 
     def _go_to_verification_wait(self, email: str):
         """Land here after signup, instead of on a sign-in form that cannot work."""
-        if self.PAGE_VERIFY_WAIT is None:
+        # Both conditions, deliberately. The index alone is not proof the page
+        # belongs to THIS dialog, and the widget is what actually gets used.
+        if self.PAGE_VERIFY_WAIT is None or getattr(
+                self, "label_verify_body", None) is None:
             self._build_verification_page()
         self._pending_verify_email = email
         self.label_verify_body.setText(

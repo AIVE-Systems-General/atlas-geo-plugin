@@ -1260,7 +1260,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     # file defines. Not a fixed literal: the index has to be whatever the
     # stack's count happens to be, or adding a page in Designer later would
     # silently point this at someone else's screen.
-    PAGE_VERIFY_WAIT    = None
+    # Not column-aligned with the block above on purpose: the alignment padding
+    # there is an existing E221 finding, and matching it would add one more.
+    PAGE_VERIFY_WAIT = None
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -1514,6 +1516,9 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
             scroll.setWidget(self.stacked_pages)   # reparents; self.<name> access unchanged
             lay.insertWidget(idx, scroll)
+            # Kept so showEvent can turn horizontal scrolling back on when, and
+            # only when, the screen is too narrow to honour the content width.
+            self._content_scroll = scroll
         except Exception as e:
             print(f"content scroll wrap failed: {e}")
 
@@ -1534,10 +1539,34 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             # size settled at 685x810 (fits the Get Started trust bar + CTA without
             # clipping, without extra headroom); still clamped to the screen so it
             # never opens larger than the available display.
-            target_w = min(685, int(avail.width()  * 0.95))
+            #
+            # ⚠️ 685 IS A FLOOR, NOT A CEILING. It used to be the width outright,
+            # while the dialog's own sizeHint asks for more once the landing and
+            # verification pages are laid out: measured 756 px against a 685 px
+            # window, so 71 px of every page sat outside the viewport. The
+            # horizontal scrollbar is deliberately AlwaysOff to stop Windows
+            # reserving a gutter, so that overflow was not reachable by
+            # scrolling either -- the trust-bar chips and the longer body text
+            # were simply cut off, on the two screens this release is about.
+            #
+            # Honour the content width when the screen allows it, and never
+            # exceed the screen: the clamp below still wins on small displays.
+            hint_w = max(self.sizeHint().width(), self.minimumSizeHint().width())
+            target_w = min(max(685, hint_w), int(avail.width()  * 0.95))
             target_h = min(810, int(avail.height() * 0.92))
-            self.resize(max(620, target_w), max(460, target_h))
+            final_w = max(620, target_w)
+            self.resize(final_w, max(460, target_h))
             self.setMaximumSize(avail.width(), avail.height())
+            # On a display too narrow to fit the content, clipping is
+            # unavoidable -- but it must not be unreachable. Horizontal
+            # scrolling is enabled only in that case, so the usual full-width
+            # path keeps the no-gutter behaviour the AlwaysOff policy exists for.
+            sc = getattr(self, "_content_scroll", None)
+            if sc is not None:
+                policy = (QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+                          if final_w < hint_w
+                          else QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                sc.setHorizontalScrollBarPolicy(policy)
             fg = self.frameGeometry()
             fg.moveCenter(avail.center())
             self.move(fg.topLeft())

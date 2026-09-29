@@ -4784,7 +4784,16 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 # still current; it is never asserted as correct from here.
                 "terms_version":   cfg.get("terms_version"),
                 "privacy_version": cfg.get("privacy_version"),
-                "client_version":  "atlas-geo-plugin/1.0",
+                # ⚠️ READ FROM metadata.txt, NEVER WRITTEN OUT HERE. This was
+                # literally "atlas-geo-plugin/1.0" through the whole 1.1.x line,
+                # so every install reported itself as 1.0 and the server could
+                # not tell releases apart: a funnel broken down by client version
+                # showed one bucket containing everyone. _plugin_version already
+                # exists for exactly this reason, and its docstring records the
+                # same bug appearing in the window title first. It returns "?"
+                # when metadata.txt cannot be read, which is an honest unknown
+                # rather than a confident wrong number.
+                "client_version":  "atlas-geo-plugin/%s" % self._plugin_version(),
             }, timeout=15)
             if response.status_code == 200:
                 QtCore.QMetaObject.invokeMethod(self, "_on_signup_success",

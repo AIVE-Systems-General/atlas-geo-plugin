@@ -1256,6 +1256,11 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     PAGE_SETUP          = 4
     PAGE_PROCESSING     = 5
     PAGE_RESULTS        = 6
+    # Appended at runtime by _build_verification_page, after the pages the .ui
+    # file defines. Not a fixed literal: the index has to be whatever the
+    # stack's count happens to be, or adding a page in Designer later would
+    # silently point this at someone else's screen.
+    PAGE_VERIFY_WAIT    = None
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -1587,6 +1592,103 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     # ─────────────────────────────────────────────────────────
     def _go_to_getstarted(self):
         self.stacked_pages.setCurrentIndex(self.PAGE_GETSTARTED)
+
+    def _build_verification_page(self):
+        """A screen for the gap between creating an account and verifying it.
+
+        ⚠️ THIS EXISTS BECAUSE THE PREVIOUS FLOW SENT PEOPLE SOMEWHERE THEY
+        COULD NOT SUCCEED. On success, signup used to call _go_to_signin and
+        pre-fill the address, so the only thing on screen was a password box
+        and a Sign In button, for an account that cannot sign in until the
+        link in the email is clicked. Measured on production over 13-28
+        September: three of twelve new accounts attempted sign-in within
+        sixteen seconds of registering and were refused, before any of them
+        had opened their inbox. The modal did say to check the email; the
+        screen underneath it said to sign in, and the screen won.
+
+        Resend lives here rather than only inside the refusal dialog, so the
+        action is visible before the mistake instead of after it.
+
+        There is deliberately NO "change email address" control. The service
+        exposes no endpoint for it, so the button could only ever apologise.
+        It is recorded as a backend prerequisite rather than faked here.
+        """
+        page = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(page)
+        root.setContentsMargins(38, 34, 38, 30)
+        root.setSpacing(0)
+
+        title = QtWidgets.QLabel("Check your email")
+        title.setStyleSheet("font-size:19px; font-weight:700; color:#1c1917;")
+        root.addWidget(title)
+        root.addSpacing(10)
+
+        self.label_verify_body = QtWidgets.QLabel()
+        self.label_verify_body.setWordWrap(True)
+        self.label_verify_body.setStyleSheet(
+            "font-size:12.5px; color:#44403c; line-height:150%;")
+        root.addWidget(self.label_verify_body)
+        root.addSpacing(6)
+
+        self.label_verify_status = QtWidgets.QLabel("")
+        self.label_verify_status.setWordWrap(True)
+        self.label_verify_status.hide()
+        root.addWidget(self.label_verify_status)
+        root.addSpacing(18)
+
+        self.btn_verify_resend = QtWidgets.QPushButton("Resend verification email")
+        self.btn_verify_resend.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_verify_resend.clicked.connect(self._on_verify_resend_clicked)
+        root.addWidget(self.btn_verify_resend)
+        root.addSpacing(8)
+
+        self.btn_verify_continue = QtWidgets.QPushButton("I've verified - go to sign in")
+        self.btn_verify_continue.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_verify_continue.clicked.connect(self._go_to_signin)
+        root.addWidget(self.btn_verify_continue)
+
+        root.addStretch(1)
+        hint = QtWidgets.QLabel(
+            "The link can only be used once. If you have already opened it, "
+            "your address is verified and you can sign in.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size:11.5px; color:#78716c;")
+        root.addWidget(hint)
+
+        type(self).PAGE_VERIFY_WAIT = self.stacked_pages.addWidget(page)
+        return page
+
+    def _go_to_verification_wait(self, email: str):
+        """Land here after signup, instead of on a sign-in form that cannot work."""
+        if self.PAGE_VERIFY_WAIT is None:
+            self._build_verification_page()
+        self._pending_verify_email = email
+        self.label_verify_body.setText(
+            "We've sent a verification link to <b>%s</b>.<br><br>"
+            "Open it to activate your account, then come back and sign in. "
+            "It may take a minute to arrive, and it is worth checking your "
+            "spam folder." % email)
+        self.label_verify_status.setText("")
+        self.label_verify_status.hide()
+        self.btn_verify_resend.setEnabled(True)
+        self.stacked_pages.setCurrentIndex(self.PAGE_VERIFY_WAIT)
+
+    def _on_verify_resend_clicked(self):
+        email = getattr(self, "_pending_verify_email", "") or ""
+        if not email:
+            return
+        self.btn_verify_resend.setEnabled(False)
+        self.btn_verify_resend.setText("Sending...")
+        try:
+            self._resend_verification_email(email, on_page="verify")
+        finally:
+            self.btn_verify_resend.setText("Resend verification email")
+            self.btn_verify_resend.setEnabled(True)
+
+    def _show_verify_status(self, message: str, msg_type: str = "info"):
+        self.label_verify_status.setText(message)
+        self.label_verify_status.setStyleSheet(self._alert_style(msg_type))
+        self.label_verify_status.show()
 
     def _go_to_signin(self):
         self.stacked_pages.setCurrentIndex(self.PAGE_SIGNIN)
@@ -4676,29 +4778,36 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 confirm_text="Resend email", cancel_text="Close", accent="orange"):
             self._resend_verification_email(email)
 
-    def _resend_verification_email(self, email: str):
+    def _resend_verification_email(self, email: str, on_page: str = "signin"):
+        # on_page routes the outcome to whichever screen asked. The same call is
+        # now reachable from the waiting screen as well as from the refusal
+        # dialog, and writing the result to the sign-in label while the user is
+        # looking at the waiting page would report the outcome somewhere they
+        # cannot see it.
+        def _say(message, kind):
+            if on_page == "verify":
+                self._show_verify_status(message, kind)
+            else:
+                self._show_signin_error(message, kind)
         try:
             response = requests.post(f"{AUTH_BASE_URL}/resend-verification", json={"email": email}, timeout=10)
             if response.status_code == 200:
-                self._show_signin_error(f"Verification link sent to {email}. Check your inbox.", "success")
+                _say(f"Verification link sent to {email}. Check your inbox.", "success")
             elif response.status_code == 400:
                 # "Email already verified". Reporting that as "Could not resend,
                 # try again later" tells the user to keep retrying something
                 # that has already succeeded, and hides the fact that the real
                 # problem is elsewhere. Say what is actually true.
-                self._show_signin_error(
-                    "This address is already verified. Sign in with your password, "
-                    "or use Forgot password if you cannot remember it.", "info")
+                _say("This address is already verified. Sign in with your password, "
+                     "or use Forgot password if you cannot remember it.", "info")
             elif response.status_code == 404:
-                self._show_signin_error(
-                    "No account found for that address. Check the spelling, or "
-                    "create an account.", "error")
+                _say("No account found for that address. Check the spelling, or "
+                     "create an account.", "error")
             else:
-                self._show_signin_error(
-                    server_message(response, "Could not resend right now. Please try again."),
-                    "error")
+                _say(server_message(response, "Could not resend right now. Please try again."),
+                     "error")
         except Exception as e:
-            self._show_signin_error(f"Error: {str(e)}", "error")
+            _say(f"Error: {str(e)}", "error")
 
     @QtCore.pyqtSlot(str)
     def _on_signin_failed(self, message: str):
@@ -4858,8 +4967,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             "We've sent a verification link to your inbox. Click it to activate your "
             "account, then sign in with your credentials.",
             accent="green", button="Got it", primary_button=True)
-        self._go_to_signin()
-        self.input_email.setText(email)
+        # ⚠️ NOT _go_to_signin. Sending a brand-new account straight to a
+        # sign-in form invites the one action that cannot succeed until the
+        # emailed link is opened, and three of twelve September registrations
+        # took that invitation within sixteen seconds. The waiting screen
+        # states what to do next and carries the resend control.
+        self._go_to_verification_wait(email)
 
     @QtCore.pyqtSlot(str)
     def _on_country_not_supported(self, message: str):

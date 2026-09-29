@@ -107,31 +107,73 @@ def test_waiting_screen_offers_a_route_back_to_sign_in():
 
 # ── nothing may promise what the service cannot do ────────────────────────
 
-def test_no_change_email_control_is_offered():
-    """The service exposes no change-address endpoint. A button for it could
-    only apologise, so it must not be built until the backend supports it.
+# ── "Use a different email" is a restart, and must never carry a password ──
 
-    Checked against the widgets the page actually constructs, not the prose:
-    the docstring explaining why the control is absent necessarily names it.
-    """
+def test_waiting_screen_offers_a_different_email_route():
     b = body_of("_build_verification_page")
-    widgets = re.findall(r'Qt[A-Za-z]*\.Q(?:PushButton|CommandLinkButton|Label)'
-                         r'\(\s*"([^"]*)"', b)
-    for label in widgets:
-        low = label.lower()
-        for phrase in ("change email", "change address", "wrong email",
-                       "edit email", "use a different"):
-            assert phrase not in low, (
-                "the waiting screen builds a control labelled %r, which has no "
-                "backend support" % label)
+    assert "btn_verify_change_email" in b
+    assert "_restart_signup_with_new_email" in b, (
+        "the different-address button must be wired to the restart handler")
 
 
-def test_change_email_absence_is_documented_not_accidental():
-    """If it is ever added, that should be a decision, not a drift."""
-    b = body_of("_build_verification_page")
-    assert "no endpoint" in b.lower() or "no \"change email address\"" in b.lower(), (
-        "the reason the change-address control is absent must be recorded in "
-        "the page that omits it")
+def test_restart_never_preserves_a_password():
+    """The one rule that matters here. The stored profile must not contain a
+    password, and the restart must not write into either password field."""
+    b = body_of("_restart_signup_with_new_email")
+    assert "input_signup_password" not in b, (
+        "the restart touches the password field; it must be left empty")
+    assert "input_signup_confirm" not in b, (
+        "the restart touches the confirm-password field; it must be left empty")
+    for bad in ("password", "passwd", "pwd"):
+        assert ('prof.get("%s")' % bad) not in b and ("prof['%s']" % bad) not in b, (
+            "the restart reads %r from the stored profile" % bad)
+
+
+def test_stored_signup_profile_holds_no_credential():
+    """_last_signup_profile outlives the page, so its contents matter."""
+    s = src()
+    block = s.split("self._last_signup_profile = {", 1)[1].split("}", 1)[0]
+    lowered = block.lower()
+    for bad in ("password", "passwd", "pwd", "confirm", "secret", "token"):
+        assert bad not in lowered, (
+            "_last_signup_profile carries %r; it must hold only non-sensitive "
+            "answers" % bad)
+
+
+def test_restart_clears_the_form_before_restoring():
+    """_go_to_signup clears every field including both passwords. Restoring
+    before it would be undone; restoring after it is what keeps the passwords
+    empty."""
+    b = body_of("_restart_signup_with_new_email")
+    clear_at = b.find("self._go_to_signup()")
+    restore_at = b.find("setText(prof[")
+    assert clear_at != -1, "the restart must go through _go_to_signup()"
+    assert restore_at == -1 or clear_at < restore_at, (
+        "values are restored before the form is cleared, so the clear wipes them")
+
+
+def test_restart_preserves_the_non_sensitive_answers():
+    b = body_of("_restart_signup_with_new_email")
+    for key in ("name", "job_title", "organization", "country"):
+        assert key in b, "the restart drops %r, which the user must retype" % key
+
+
+def test_copy_states_it_starts_registration_and_changes_nothing():
+    """Telling someone their address was changed, when the pending account
+    still exists, is a claim their next sign-in attempt disproves."""
+    b = body_of("_restart_signup_with_new_email")
+    low = b.lower()
+    assert "starts registration again" in low
+    assert "not changed or removed" in low, (
+        "the copy must say the earlier account is untouched")
+    assert "password again" in low, (
+        "the copy must warn that the password has to be re-entered")
+
+
+def test_restart_is_confirmed_before_leaving_the_screen():
+    b = body_of("_restart_signup_with_new_email")
+    assert "_themed_confirm" in b and "return" in b, (
+        "a misclick must be recoverable: confirm before navigating away")
 
 
 def test_reused_link_case_is_explained_on_the_screen():

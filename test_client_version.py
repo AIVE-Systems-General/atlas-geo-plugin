@@ -91,8 +91,10 @@ def test_sent_value_matches_metadata_for_this_build():
     the version QGIS shows in the plugin manager."""
     version = metadata_version()
     sent = "atlas-geo-plugin/%s" % version
-    assert re.fullmatch(r"atlas-geo-plugin/\d+\.\d+\.\d+", sent), (
-        "unexpected shape %r" % sent)
+    # A pre-release suffix is permitted: release candidates carry one, and the
+    # point of this test is that the number is REAL, not that it is final.
+    assert re.fullmatch(r"atlas-geo-plugin/\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?",
+                        sent), ("unexpected shape %r" % sent)
     assert not sent.endswith("/1.0"), (
         "this build would still report 1.0, which is the bug")
 

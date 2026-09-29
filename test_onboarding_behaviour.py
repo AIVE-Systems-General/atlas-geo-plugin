@@ -350,3 +350,25 @@ def test_country_refusal_is_not_treated_as_a_verification_problem(dlg, monkeypat
     dlg._on_signin_failed("ATLAS-GEO is not available in your region yet.")
     assert "verify" not in called
     assert "region" in dlg.label_signin_error.text().lower()
+
+
+# ── 11. the header must state the version that is running ─────────────────
+
+def test_header_shows_the_real_version_on_open(dlg):
+    """The .ui carries a literal "v1.0" as the header default, and it was only
+    replaced on sign-in or sign-out. The opening screen therefore advertised
+    v1.0 on every release, which is the first thing a new user sees and the
+    version a screenshot in a bug report would name."""
+    shown = dlg.label_header_status.text().strip()
+    assert shown.startswith("v")
+    assert shown != "v1.0", "the header still shows the .ui placeholder version"
+    assert shown == "v%s" % dlg._plugin_version()
+
+
+def test_header_version_matches_metadata(dlg):
+    import pathlib
+    meta = (pathlib.Path(dlg.__module__ and HERE) / "metadata.txt").read_text(
+        encoding="utf-8")
+    version = [l.split("=", 1)[1].strip() for l in meta.splitlines()
+               if l.strip().startswith("version=")][0]
+    assert dlg.label_header_status.text().strip() == "v%s" % version

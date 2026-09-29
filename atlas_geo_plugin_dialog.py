@@ -1550,6 +1550,13 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     def _wire_signals(self):
         self._install_create_account_route()
         self._mark_optional_signup_fields()
+        # ⚠️ THE HEADER CHIP SHOWS THE .ui's LITERAL "v1.0" UNTIL SOMETHING
+        # UPDATES IT. _update_header_status was only reached on sign-in, sign-out
+        # and one later event, so the opening screen advertised v1.0 on every
+        # release: the first thing a new user saw was the wrong version, and a
+        # screenshot in a bug report would name a build nobody was running.
+        # Same failure as the signup client_version literal, in a second place.
+        self._update_header_status()
         self.btn_get_started.clicked.connect(self._go_to_signin)
 
         self.btn_signin.clicked.connect(self._handle_signin)

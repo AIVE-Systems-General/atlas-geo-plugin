@@ -1548,6 +1548,8 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     # SIGNAL WIRING
     # ─────────────────────────────────────────────────────────
     def _wire_signals(self):
+        self._install_create_account_route()
+        self._mark_optional_signup_fields()
         self.btn_get_started.clicked.connect(self._go_to_signin)
 
         self.btn_signin.clicked.connect(self._handle_signin)
@@ -1593,6 +1595,76 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
     def _go_to_getstarted(self):
         self.stacked_pages.setCurrentIndex(self.PAGE_GETSTARTED)
 
+    def _install_create_account_route(self):
+        """Give new users a route to registration from the opening screen.
+
+        ⚠️ THE LANDING PAGE HAD EXACTLY ONE BUTTON, AND IT WENT TO SIGN IN.
+        "Get Started" is the language of a new user, but it opened a password
+        form for an account they did not have; reaching registration meant
+        noticing a secondary link on the page after it. Over 13-28 September
+        the signup screen was opened 26 times against roughly 145 package
+        downloads, and this is the first obstacle on that path.
+
+        The account-creation button is added here rather than in Designer so
+        the change is visible in review and testable without opening the .ui.
+        It is inserted BEFORE the existing button in the same layout, so it
+        reads first, and the original is relabelled for people who already
+        have an account instead of being removed.
+
+        The free allowance is stated here too. It was nowhere in the shipped
+        package, so the offer was invisible until after registration.
+        """
+        btn = getattr(self, "btn_get_started", None)
+        if btn is None:                       # stale .ui: nothing to attach to
+            return
+        parent = btn.parentWidget()
+        layout = parent.layout() if parent is not None else None
+        if layout is None:
+            return
+        idx = layout.indexOf(btn)
+        if idx < 0:
+            return
+
+        self.btn_create_account = QtWidgets.QPushButton("Create your free account")
+        self.btn_create_account.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_create_account.clicked.connect(self._go_to_signup)
+        self.btn_create_account.setMinimumHeight(btn.minimumHeight() or 0)
+        self.btn_create_account.setSizePolicy(btn.sizePolicy())
+
+        self.label_free_allowance = QtWidgets.QLabel(
+            "Includes 200 images, free. No card required.")
+        self.label_free_allowance.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.label_free_allowance.setWordWrap(True)
+        self.label_free_allowance.setStyleSheet(
+            "font-size:11.5px; color:#78716c; margin:0px 32px;")
+
+        layout.insertWidget(idx, self.btn_create_account)
+        layout.insertWidget(idx + 1, self.label_free_allowance)
+
+        # Kept, not removed: returning users still need this, and it is the
+        # only route to sign-in from the opening screen.
+        btn.setText("I already have an account")
+
+    def _mark_optional_signup_fields(self):
+        """Say which registration questions can be skipped.
+
+        Job title and employer are already optional to the server, which
+        accepts the request without them and omits the keys entirely when they
+        are blank. The form never said so, so every field read as required and
+        the form looked longer than it is. Marking them is the cheapest
+        available reduction in apparent effort, and it changes no validation:
+        the submit path is untouched.
+
+        ⚠️ COUNTRY IS NOT MARKED. The server rules on eligibility using it, so
+        it is genuinely required, and labelling it optional would produce a
+        refusal after submission instead of a prompt before it.
+        """
+        for attr, text in (("label_sn_jobtitle", "Job Title  (optional)"),
+                           ("label_sn_org", "Employer or Organisation  (optional)")):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setText(text)
+
     def _build_verification_page(self):
         """A screen for the gap between creating an account and verifying it.
 
@@ -1609,9 +1681,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         Resend lives here rather than only inside the refusal dialog, so the
         action is visible before the mistake instead of after it.
 
-        There is deliberately NO "change email address" control. The service
-        exposes no endpoint for it, so the button could only ever apologise.
-        It is recorded as a backend prerequisite rather than faked here.
+        "Use a different email address" is a CLIENT-SIDE RESTART of
+        registration, not an address change. The service exposes no operation
+        that replaces the address on a pending account, so the button returns
+        to the form with a corrected address rather than pretending to edit
+        anything. A true server-side replacement remains future work, and the
+        copy is explicit so nobody is told their address moved when it did not.
         """
         page = QtWidgets.QWidget()
         root = QtWidgets.QVBoxLayout(page)
@@ -1646,6 +1721,12 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_verify_continue.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.btn_verify_continue.clicked.connect(self._go_to_signin)
         root.addWidget(self.btn_verify_continue)
+        root.addSpacing(8)
+
+        self.btn_verify_change_email = QtWidgets.QPushButton("Use a different email address")
+        self.btn_verify_change_email.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_verify_change_email.clicked.connect(self._restart_signup_with_new_email)
+        root.addWidget(self.btn_verify_change_email)
 
         root.addStretch(1)
         hint = QtWidgets.QLabel(
@@ -1684,6 +1765,65 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         finally:
             self.btn_verify_resend.setText("Resend verification email")
             self.btn_verify_resend.setEnabled(True)
+
+    def _restart_signup_with_new_email(self):
+        """Return to registration so a mistyped address can be corrected.
+
+        ⚠️ THIS IS A CLIENT-SIDE RESTART, NOT AN ADDRESS CHANGE. The service
+        has no operation that replaces the address on a pending account, so
+        nothing here can move, rename or delete the account already created.
+        It starts a fresh registration, and the copy says so: telling someone
+        their address had been "changed" when the earlier pending account still
+        exists would be a lie the next sign-in attempt exposes.
+
+        The non-sensitive answers are handed back so the form does not have to
+        be retyped. ⚠️ BOTH PASSWORD FIELDS ARE LEFT EMPTY, deliberately. They
+        are not carried in _last_signup_profile and must not be: re-entering a
+        password costs one field, and pre-filling one invites a credential into
+        somewhere it does not need to be.
+        """
+        prof = dict(getattr(self, "_last_signup_profile", {}) or {})
+        if not self._themed_confirm(
+                "Use a different email address",
+                "This starts registration again with a corrected address.\n\n"
+                "The account already created for %s is not changed or removed, "
+                "and its verification link stays valid. If that address was "
+                "correct after all, go back and verify it instead.\n\n"
+                "You will need to enter your password again."
+                % (prof.get("email") or "the earlier address"),
+                confirm_text="Start again", cancel_text="Go back",
+                accent="orange"):
+            return
+
+        # _go_to_signup clears every field, including the passwords, and
+        # refetches the legal configuration. Restoring happens after it so the
+        # clear cannot undo the restore.
+        self._go_to_signup()
+
+        for attr, key in (("input_signup_name", "name"),
+                          ("input_signup_jobtitle", "job_title"),
+                          ("input_signup_org", "organization")):
+            w = getattr(self, attr, None)
+            if w is not None and prof.get(key):
+                w.setText(prof[key])
+
+        combo = getattr(self, "combo_signup_country", None)
+        if combo is not None and prof.get("country"):
+            idx = combo.findData(prof["country"])
+            if idx > 0:
+                combo.setCurrentIndex(idx)
+
+        # The previous address is offered for editing rather than blanked: the
+        # reason people arrive here is a typo, and correcting one is easier
+        # than retyping the whole thing.
+        if prof.get("email"):
+            self.input_signup_email.setText(prof["email"])
+        self.input_signup_email.setFocus()
+        self.input_signup_email.selectAll()
+
+        self._show_signup_error(
+            "Enter the corrected address and your password. Your earlier "
+            "registration is untouched.", "info")
 
     def _show_verify_status(self, message: str, msg_type: str = "info"):
         self.label_verify_status.setText(message)
@@ -4867,6 +5007,17 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         country = ""
         if combo is not None and combo.currentIndex() > 0:
             country = combo.itemData(combo.currentIndex()) or ""
+
+        # Kept so "Use a different email" can hand the non-sensitive answers
+        # back rather than making someone retype them.
+        # ⚠️ PASSWORDS ARE NOT STORED HERE, and must never be added. This
+        # attribute outlives the page and would put a plaintext credential in
+        # memory for the rest of the session for no benefit: the corrected
+        # registration asks for the password again anyway.
+        self._last_signup_profile = {
+            "name": name, "email": email, "job_title": job_title,
+            "organization": org, "country": country,
+        }
 
         self.btn_do_signup.setEnabled(False)
         self.btn_do_signup.setText("Creating account…")

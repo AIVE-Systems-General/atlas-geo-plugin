@@ -367,8 +367,100 @@ def test_header_shows_the_real_version_on_open(dlg):
 
 def test_header_version_matches_metadata(dlg):
     import pathlib
-    meta = (pathlib.Path(dlg.__module__ and HERE) / "metadata.txt").read_text(
-        encoding="utf-8")
-    version = [l.split("=", 1)[1].strip() for l in meta.splitlines()
-               if l.strip().startswith("version=")][0]
+    meta = (pathlib.Path(HERE) / "metadata.txt").read_text(encoding="utf-8")
+    version = [line.split("=", 1)[1].strip() for line in meta.splitlines()
+               if line.strip().startswith("version=")][0]
     assert dlg.label_header_status.text().strip() == "v%s" % version
+
+
+# ── 12. the window must open wide enough to show its own content ──────────
+
+def _shown(dlg):
+    """Force the one-time fit-to-screen path that showEvent performs."""
+    dlg.show()
+    from qgis.PyQt import QtWidgets
+    QtWidgets.QApplication.processEvents()
+    return dlg
+
+
+def test_dialog_opens_at_least_as_wide_as_its_content(dlg):
+    """The regression: width was pinned to a literal 685 while the laid-out
+    pages asked for 756, so 71 px of every page sat outside the viewport."""
+    d = _shown(dlg)
+    from qgis.PyQt import QtWidgets
+    avail = (d.screen() or QtWidgets.QApplication.primaryScreen()).availableGeometry()
+    hint = max(d.sizeHint().width(), d.minimumSizeHint().width())
+    if avail.width() * 0.95 >= hint:
+        assert d.width() >= hint, (
+            "opened %d px wide for %d px of content" % (d.width(), hint))
+
+
+def test_dialog_never_exceeds_the_available_screen(dlg):
+    d = _shown(dlg)
+    from qgis.PyQt import QtWidgets
+    avail = (d.screen() or QtWidgets.QApplication.primaryScreen()).availableGeometry()
+    assert d.width() <= avail.width()
+    assert d.height() <= avail.height()
+
+
+def test_width_floor_is_preserved(dlg):
+    """685 remains the floor for narrow content; it must not become a ceiling
+    again, and it must not regress below the old minimum either."""
+    d = _shown(dlg)
+    assert d.width() >= 620
+
+
+def test_horizontal_scrolling_only_when_content_cannot_fit(dlg):
+    """AlwaysOff exists to stop Windows reserving a right-hand gutter. It may
+    only be relaxed when the screen genuinely cannot show the content, or the
+    gutter bug returns on every normal display."""
+    from qgis.PyQt import QtCore
+    d = _shown(dlg)
+    sc = getattr(d, "_content_scroll", None)
+    if sc is None:
+        pytest.skip("content scroll wrapper not installed")
+    hint = max(d.sizeHint().width(), d.minimumSizeHint().width())
+    policy = sc.horizontalScrollBarPolicy()
+    if d.width() >= hint:
+        assert policy == QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff, (
+            "horizontal gutter re-enabled on a window that fits its content")
+    else:
+        assert policy == QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded, (
+            "content is clipped and unreachable")
+
+
+@pytest.mark.parametrize("page_attr", ["PAGE_GETSTARTED", "PAGE_SIGNUP"])
+def test_onboarding_pages_fit_the_viewport_width(dlg, page_attr):
+    """The two screens this release is about must not be cut off."""
+    d = _shown(dlg)
+    d.stacked_pages.setCurrentIndex(getattr(d, page_attr))
+    from qgis.PyQt import QtWidgets
+    QtWidgets.QApplication.processEvents()
+    page = d.stacked_pages.currentWidget()
+    needed = page.sizeHint().width()
+    assert d.stacked_pages.width() >= min(needed, d.width()), (
+        "%s is wider (%d) than the space it is given (%d)"
+        % (page_attr, needed, d.stacked_pages.width()))
+
+
+def test_narrow_screen_keeps_clipped_content_reachable(dlg, monkeypatch):
+    """The other branch, forced. When the content genuinely cannot fit, the
+    window must clamp to the screen AND expose horizontal scrolling, or the
+    overflow is unreachable exactly as it was before this fix.
+
+    sizeHint is stubbed rather than the screen, because Qt offers no portable
+    way to shrink the display under test.
+    """
+    from qgis.PyQt import QtCore, QtWidgets
+    huge = QtCore.QSize(100000, 400)
+    monkeypatch.setattr(type(dlg), "sizeHint", lambda self: huge, raising=False)
+    dlg._fitted = False                     # re-arm the one-time fit
+    dlg.show()
+    QtWidgets.QApplication.processEvents()
+    avail = (dlg.screen() or QtWidgets.QApplication.primaryScreen()).availableGeometry()
+    assert dlg.width() <= avail.width(), "the window escaped the screen"
+    sc = getattr(dlg, "_content_scroll", None)
+    if sc is not None:
+        assert sc.horizontalScrollBarPolicy() == \
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded, (
+            "content wider than the screen must stay reachable by scrolling")

@@ -3,7 +3,7 @@ name=AIVE ATLAS GEO
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.2.99
 description=Automatically georeference aerial images from drones and aircraft without placing control points manually - process one image or batches of up to 100. Includes 200 free images each month, with no card required to sign up.
-version=1.1.5-rc2
+version=1.1.5
 author=AIVE AI Systems
 email=luis.sentis@aivesystems.com
 about=
@@ -23,6 +23,27 @@ about=
 tracker=https://github.com/AIVE-Systems-General/atlas-geo-plugin/issues
 repository=https://github.com/AIVE-Systems-General/atlas-geo-plugin
 changelog=
+    Version 1.1.5 - Onboarding, and the name the plugin goes by. The plugin is
+    now called AIVE ATLAS GEO. Only the visible name changed: this is an
+    ordinary update to the same plugin, and existing installs keep their
+    settings and sign-in.
+    Creating an account is now offered on the opening screen, which previously
+    led only to sign-in, and the 200 images included each month are stated
+    before you register. After signing up you land on a screen that tells you
+    to check your email, with buttons to resend the link, return to sign in, or
+    start again with a different address if you mistyped it. Signing in before
+    verifying now explains what to do instead of showing a bare error, and
+    opening an already-used verification link says the address is verified
+    rather than reporting a failure.
+    The window now opens wide enough to show its own content: both onboarding
+    screens were previously cut off at the right edge with no way to scroll to
+    the rest. The header shows the version that is actually running, and the
+    plugin reports its real version to the service instead of always saying
+    1.0. Job title and employer are marked as optional, which they always were.
+    The listing text has been corrected. It no longer describes a capability
+    the plugin does not have, and it now states the 100-image submission
+    limit, that uploaded imagery is not used to train or fine-tune AI models,
+    and that availability follows the country declared on the account.
     Version 1.1.4 - Larger submissions, non-destructive mosaics and dated
     report filenames. You can now select up to
     100 images in one submission instead of 10. They are uploaded in small

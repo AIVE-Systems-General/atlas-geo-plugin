@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
  ATLAS Geo-Dock
- A QGIS plugin for UAV pose estimation and UAV-to-map registration.
+ A QGIS plugin that georeferences aerial imagery against reference maps.
 
  Copyright © 2026 AIVE AI Systems
 
@@ -284,7 +284,7 @@ def _apply_geotransform_in_place(path, west, north, east, south, epsg=4326):
 # Exception messages can carry URLs, response bodies, file paths or image
 # metadata. Nothing may log tokens, authorization headers, email addresses
 # or GPS/EXIF values.
-_LOG_TAG = "ATLAS Geo-Dock"
+_LOG_TAG = "AIVE ATLAS GEO"
 _LOG_INFO = Qgis.MessageLevel.Info
 _LOG_WARNING = Qgis.MessageLevel.Warning
 _log_once_contexts = set()
@@ -1047,7 +1047,7 @@ class ThemedDialog(QtWidgets.QDialog):
     Callers add their content widgets/layouts to ``self.body``.
     """
 
-    def __init__(self, parent=None, title="ATLAS-GEO", subtitle=""):
+    def __init__(self, parent=None, title="AIVE ATLAS GEO", subtitle=""):
         super().__init__(parent)
         self.setWindowFlags(QtCore.Qt.WindowType.Dialog | QtCore.Qt.WindowType.FramelessWindowHint)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -2018,7 +2018,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                     QtCore.QMetaObject.invokeMethod(self, "_on_signin_failed",
                         QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, server_message(
-                            response, "ATLAS-GEO is not available in your region yet.")))
+                            response, "AIVE ATLAS GEO is not available in your region yet.")))
                 else:
                     QtCore.QMetaObject.invokeMethod(self, "_on_email_not_verified",
                         QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(str, email))
@@ -4926,7 +4926,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
         # Enterprise — sales-led / manual invoicing
         ent_btn = self._styled_button("Contact Sales", primary=False)
         ent_btn.clicked.connect(lambda: QDesktopServices.openUrl(
-            QUrl("mailto:sales@aivesystems.com?subject=ATLAS-GEO%20Enterprise%20enquiry")))
+            QUrl("mailto:sales@aivesystems.com?subject=AIVE%20ATLAS%20GEO%20Enterprise%20enquiry")))
         ent_box.addWidget(ent_btn)
 
         # Footer: manage saved card / cancel subscription via the Stripe portal.
@@ -5131,14 +5131,14 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
                 QtCore.QMetaObject.invokeMethod(self, "_on_country_not_supported",
                     QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, detail.get("message") or
-                                 "ATLAS-GEO is not available in your region yet."))
+                                 "AIVE ATLAS GEO is not available in your region yet."))
             elif code == "LEGAL_VERSION_STALE":
                 QtCore.QMetaObject.invokeMethod(self, "_legal_versions_stale",
                     QtCore.Qt.ConnectionType.QueuedConnection, QtCore.Q_ARG(dict, detail))
             elif code == "PLUGIN_LEGAL_UNSUPPORTED":
                 QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, detail.get("message")
-                                 or "Please update ATLAS-GEO to continue."))
+                                 or "Please update AIVE ATLAS GEO to continue."))
             elif response.status_code == 409:
                 QtCore.QMetaObject.invokeMethod(self, "_on_signup_failed", QtCore.Qt.ConnectionType.QueuedConnection,
                     QtCore.Q_ARG(str, "This email is already registered. Sign in instead."))
@@ -10094,7 +10094,7 @@ class AtlasGeoHandlerDemoDialog(QtWidgets.QDialog, FORM_CLASS):
             <tr>
               <td valign="middle" width="120">{logo_img}</td>
               <td valign="middle">
-                <span style="font-size:16pt;font-weight:bold;color:#ea580c;">ATLAS-GEO</span>
+                <span style="font-size:16pt;font-weight:bold;color:#ea580c;">AIVE ATLAS GEO</span>
               </td>
               <td valign="middle" align="right" width="230">
                 <span style="font-size:9pt;font-weight:bold;color:#57534e;">REGISTRATION&nbsp;REPORT</span><br/>

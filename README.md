@@ -1,7 +1,8 @@
-# ATLAS Geo-Dock
+# AIVE ATLAS GEO
 
-A QGIS plugin that georeferences UAV imagery against reference maps using
-AI-powered pose estimation.
+A QGIS plugin that automatically georeferences aerial images from drones and
+aircraft against reference mapping imagery, without placing control points by
+hand.
 
 Select drone images in QGIS, submit them, and receive georeferenced outputs you
 can load straight onto the canvas. The plugin handles batch submission, a

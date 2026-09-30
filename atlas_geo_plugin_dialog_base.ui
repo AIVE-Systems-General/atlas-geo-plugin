@@ -6,7 +6,7 @@
    <rect><x>0</x><y>0</y><width>740</width><height>600</height></rect>
   </property>
   <property name="windowTitle">
-   <string>ATLAS-GEO</string>
+   <string>AIVE ATLAS GEO</string>
   </property>
   <property name="font">
    <font>
@@ -580,7 +580,7 @@ QMenu::separator { height: 1px; background: #ece6dd; margin: 4px 8px; }
       </item>
       <item>
        <widget class="QLabel" name="label_header_wordmark">
-        <property name="text"><string>&lt;b&gt;ATLAS·GEO&lt;/b&gt;&lt;span style="color:#6b5d52;"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;│&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;/span&gt;&lt;span style="color:#c9b8a3; font-weight:600; font-size:10px;"&gt;AIVE&amp;nbsp;AI&amp;nbsp;SYSTEMS&lt;/span&gt;</string></property>
+        <property name="text"><string>&lt;b&gt;AIVE ATLAS GEO&lt;/b&gt;&lt;span style="color:#6b5d52;"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;│&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;/span&gt;&lt;span style="color:#c9b8a3; font-weight:600; font-size:10px;"&gt;AIVE&amp;nbsp;AI&amp;nbsp;SYSTEMS&lt;/span&gt;</string></property>
         <property name="styleSheet"><string>background: transparent; border: none; color: #ffffff; font-size: 12px; font-family: "Segoe UI", sans-serif;</string></property>
        </widget>
       </item>
@@ -615,7 +615,7 @@ QMenu::separator { height: 1px; background: #ece6dd; margin: 4px 8px; }
 
        <item>
         <widget class="QLabel" name="label_getstarted_title">
-         <property name="text"><string>ATLAS-GEO</string></property>
+         <property name="text"><string>AIVE ATLAS GEO</string></property>
          <property name="alignment"><set>Qt::AlignCenter</set></property>
          <property name="styleSheet">
           <string>font-size: 38px; font-weight: 800; color: #1a1612; letter-spacing: 1px;</string>
@@ -828,7 +828,7 @@ QFrame#frame_signin_hero {
           </item>
           <item>
            <widget class="QLabel">
-            <property name="text"><string>ATLAS-GEO</string></property>
+            <property name="text"><string>AIVE ATLAS GEO</string></property>
             <property name="alignment"><set>Qt::AlignCenter</set></property>
             <property name="styleSheet"><string>font-size: 15px; font-weight: 800; color: #ea580c; letter-spacing: 5px; background: transparent; border: none; font-family: "Consolas", monospace;</string></property>
            </widget>
@@ -1458,7 +1458,7 @@ QPushButton:pressed {
        </item>
        <item>
         <widget class="QLabel" name="label_screen1_subtitle">
-         <property name="text"><string>Upload aerial photographs for geo-localization and pose estimation.</string></property>
+         <property name="text"><string>Upload aerial photographs to georeference them against reference mapping imagery.</string></property>
          <property name="styleSheet"><string>font-size: 12px; color: #78716c; margin-bottom: 6px;</string></property>
         </widget>
        </item>

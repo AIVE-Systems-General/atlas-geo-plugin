@@ -1,11 +1,11 @@
-# Installing ATLAS Geo-Dock
+# Installing AIVE ATLAS GEO
 
 ## 1. Install the plugin
 
 **From the QGIS Plugin Repository (recommended)**
 
 1. In QGIS, open Plugins > Manage and Install Plugins.
-2. Search for "ATLAS Geo-Dock".
+2. Search for "AIVE ATLAS GEO".
 3. Click Install Plugin.
 
 **From a ZIP file**
@@ -61,7 +61,7 @@ downloadable worldwide, but an account may not be usable outside them.
 
 ## Uninstalling
 
-Plugins > Manage and Install Plugins > Installed, select ATLAS Geo-Dock, then
+Plugins > Manage and Install Plugins > Installed, select AIVE ATLAS GEO, then
 
 or `requests`, which other software may be using, and it does not delete data
 held by the ATLAS service. To remove your account data, use the account options

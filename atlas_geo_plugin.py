@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
  ATLAS Geo-Dock
- A QGIS plugin for UAV pose estimation and UAV-to-map registration.
+ A QGIS plugin that georeferences aerial imagery against reference maps.
 
  Copyright © 2026 AIVE AI Systems
 
@@ -84,7 +84,7 @@ class AtlasGeoHandlerDemo:
         # resources.py is ever recompiled.
         self.add_action(
             os.path.join(self.plugin_dir, 'icon.png'),
-            text=self.tr(u'Atlas Georeferencer'),
+            text=self.tr(u'AIVE ATLAS GEO'),
             callback=self.run,
             parent=self.iface.mainWindow(),
         )
@@ -111,7 +111,7 @@ class AtlasGeoHandlerDemo:
             except Exception as exc:                          # noqa: BLE001
                 QgsMessageLog.logMessage(
                     f"dialog not released on unload: {type(exc).__name__}",
-                    "ATLAS Geo-Dock", level=Qgis.MessageLevel.Warning)
+                    "AIVE ATLAS GEO", level=Qgis.MessageLevel.Warning)
             self.dlg = None
         self.first_start = True
 
@@ -165,16 +165,16 @@ class AtlasGeoHandlerDemo:
                 QgsMessageLog.logMessage(
                     f"startup failed at stage=dialog_construct "
                     f"error_class={type(exc).__name__} code={code}",
-                    "ATLAS Geo-Dock", level=Qgis.MessageLevel.Critical)
+                    "AIVE ATLAS GEO", level=Qgis.MessageLevel.Critical)
                 QMessageBox.critical(
                     self.iface.mainWindow(),
-                    self.tr("ATLAS Geo-Dock could not open"),
+                    self.tr("AIVE ATLAS GEO could not open"),
                     self.tr(
                         "The plugin could not start.\n\n"
                         "Reference code: {code}\n\n"
                         "Please report this code along with your QGIS version "
                         "and operating system. Further detail is in the QGIS "
-                        "message log under 'ATLAS Geo-Dock'.").format(code=code))
+                        "message log under 'AIVE ATLAS GEO'.").format(code=code))
                 return
             # Only now is the dialog real. Assign last.
             self.dlg = dlg

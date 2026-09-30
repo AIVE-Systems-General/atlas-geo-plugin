@@ -115,8 +115,50 @@ def test_internal_identifiers_still_present(ident):
 
 # ── listing content: what it must say ─────────────────────────────────────
 
-def test_version_is_rc2():
-    assert meta_field("version") == "1.1.5-rc2"
+def test_version_is_final():
+    assert meta_field("version") == "1.1.5"
+
+
+def test_version_carries_no_prerelease_suffix():
+    """The RC suffix reaching the repository would publish a release candidate
+    as the release, and the version string is also what the service is told."""
+    v = meta_field("version")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", v), "not a plain release version: %r" % v
+
+
+def test_changelog_documents_this_release():
+    c = _parsed().get("general", "changelog")
+    assert re.search(r"^\s*Version 1\.1\.5\b", c, re.M), (
+        "the changelog has no entry for the version being released")
+
+
+def test_changelog_keeps_every_earlier_entry():
+    """Each entry is the only public record of what a release changed."""
+    c = _parsed().get("general", "changelog")
+    for v in ("1.1.4", "1.1.3", "1.1.2", "1.1.1", "1.1.0", "1.0.0"):
+        assert "Version %s" % v in c, "changelog lost the %s entry" % v
+
+
+def test_changelog_survives_a_strict_reader():
+    """A blank line between entries reads fine here and terminates the value in
+    a stricter reader, which then treats the rest of the history as junk. The
+    entries are separated by their "Version x.y.z" openings, not by blanks.
+    """
+    import configparser
+    strict = configparser.ConfigParser(empty_lines_in_values=False)
+    strict.read(str(META), encoding="utf-8")
+    assert strict.get("general", "changelog") == _parsed().get("general",
+                                                               "changelog")
+
+
+def test_no_blank_line_inside_a_continued_value():
+    """Source-level guard for the same defect, so the cause is named at the
+    line rather than inferred from a parser disagreement."""
+    lines = meta_text().split("\n")
+    for i, line in enumerate(lines[:-1]):
+        if line.strip() == "" and lines[i + 1].startswith("    "):
+            raise AssertionError(
+                "blank line %d sits inside a continued value" % (i + 1))
 
 
 def test_short_description_states_the_batch_limit():
@@ -230,7 +272,8 @@ def test_metadata_parses_with_the_qgis_reader():
 def test_about_renders_without_artificial_separator_characters():
     """Lone "." lines were used as paragraph breaks and rendered as periods."""
     about = _parsed().get("general", "about")
-    lone = [l for l in about.split("\n") if l.strip() in (".", "-", "*", "_")]
+    lone = [ln for ln in about.split("\n")
+            if ln.strip() in (".", "-", "*", "_")]
     assert not lone, "about renders %d artificial separator lines" % len(lone)
 
 
@@ -259,7 +302,7 @@ def test_fields_after_about_remain_separate_keys(key):
 def test_urls_survive_parsing_on_their_own_line(url):
     """On their own line so a renderer can linkify them, and unsplit."""
     about = _parsed().get("general", "about")
-    assert any(l.strip() == url for l in about.split("\n")), (
+    assert any(ln.strip() == url for ln in about.split("\n")), (
         "%s is not intact on its own line after parsing" % url)
 
 
